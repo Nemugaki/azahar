@@ -309,14 +309,30 @@
             <string>Enable agent RPC server</string>
           </property>
           <property name="toolTip">
-            <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Enables the loopback-only RPC server on 127.0.0.1:45987 for lifecycle control, debugger capture, and guest-memory access.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+            <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Enables the loopback-only RPC server on 127.0.0.1 using the configured port.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
           </property>
         </widget>
+      </item>
+      <item row="4" column="1">
+       <widget class="QSpinBox" name="rpc_server_port">
+        <property name="toolTip">
+         <string>Loopback UDP port. AZAHAR_RPC_PORT overrides this setting for the current process.</string>
+        </property>
+        <property name="prefix">
+         <string>Port: </string>
+        </property>
+        <property name="minimum">
+         <number>1</number>
+        </property>
+        <property name="maximum">
+         <number>65535</number>
+        </property>
+       </widget>
       </item>
       <item row="5" column="0">
        <widget class="QLabel" name="rpc_server_info">
         <property name="text">
-         <string>Available before and between games. Supports lifecycle control, one-shot PICA state capture, PICA breakpoints, and command tracing.</string>
+         <string>Available before and between games. Port changes take effect after restarting Azahar.</string>
         </property>
         <property name="wordWrap">
          <bool>true</bool>

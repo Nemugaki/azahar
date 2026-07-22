@@ -7,6 +7,7 @@
 #include <boost/asio.hpp>
 #include "common/common_types.h"
 #include "common/logging/log.h"
+#include "common/settings.h"
 #include "core/rpc/packet.h"
 #include "core/rpc/udp_server.h"
 
@@ -15,12 +16,13 @@ namespace Core::RPC {
 u16 GetRPCPort() {
     const char* value = std::getenv("AZAHAR_RPC_PORT");
     if (!value) {
-        return 45987;
+        return Settings::values.rpc_server_port.GetValue();
     }
     char* end{};
     const auto port = std::strtoul(value, &end, 10);
-    return end != value && *end == '\0' && port > 0 && port <= UINT16_MAX ? static_cast<u16>(port)
-                                                                          : 45987;
+    return end != value && *end == '\0' && port > 0 && port <= UINT16_MAX
+               ? static_cast<u16>(port)
+               : Settings::values.rpc_server_port.GetValue();
 }
 
 class UDPServer::Impl {

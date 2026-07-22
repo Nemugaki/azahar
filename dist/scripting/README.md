@@ -1,8 +1,9 @@
 # Scripting RPC
 
 When scripting support is compiled in and RPC is enabled, Azahar listens on UDP port 45987 on
-`127.0.0.1`. The server starts with the Qt frontend and stays available while games are started,
-stopped, or restarted. It is deliberately loopback-only because the protocol can write emulated
+`127.0.0.1`. The port is configurable under Debug settings. The server starts with the Qt frontend
+and stays available while games are started, stopped, or restarted. It is deliberately
+loopback-only because the protocol can write emulated
 memory and has no authentication. Set `AZAHAR_RPC_PORT` before launching Azahar to override the
 default port, which is useful for isolated test instances; pass the same port to the client.
 
