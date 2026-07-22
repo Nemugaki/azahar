@@ -5,6 +5,7 @@
 #pragma once
 
 #include <atomic>
+#include <deque>
 #include <mutex>
 #include <span>
 #include <vector>
@@ -426,7 +427,11 @@ private:
 
     std::atomic_bool snapshot_requested{};
     mutable std::mutex snapshot_mutex;
-    std::vector<u8> snapshot;
+    struct SnapshotRecord {
+        u32 generation;
+        std::vector<u8> data;
+    };
+    std::deque<SnapshotRecord> snapshots;
     u32 snapshot_generation{};
 };
 

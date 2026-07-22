@@ -2,6 +2,7 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
+#include <algorithm>
 #include <nihstro/float24.h>
 #include "common/arch.h"
 #include "common/archives.h"
@@ -62,23 +63,28 @@ void PicaCore::RequestSnapshot() {
 
 PicaCore::SnapshotInfo PicaCore::GetSnapshotInfo() const {
     std::lock_guard lock{snapshot_mutex};
-    return {snapshot_generation, static_cast<u32>(snapshot.size())};
+    return snapshots.empty()
+               ? SnapshotInfo{snapshot_generation, 0}
+               : SnapshotInfo{snapshots.back().generation,
+                              static_cast<u32>(snapshots.back().data.size())};
 }
 
 u32 PicaCore::ReadSnapshot(u32 generation, u32 offset, std::span<u8> output) const {
     std::lock_guard lock{snapshot_mutex};
-    if (generation != snapshot_generation || offset >= snapshot.size()) {
+    const auto snapshot = std::ranges::find_if(
+        snapshots, [generation](const auto& entry) { return entry.generation == generation; });
+    if (snapshot == snapshots.end() || offset >= snapshot->data.size()) {
         return 0;
     }
     const u32 size =
-        std::min(static_cast<u32>(output.size()), static_cast<u32>(snapshot.size() - offset));
-    std::memcpy(output.data(), snapshot.data() + offset, size);
+        std::min(static_cast<u32>(output.size()), static_cast<u32>(snapshot->data.size() - offset));
+    std::memcpy(output.data(), snapshot->data.data() + offset, size);
     return size;
 }
 
 void PicaCore::ClearSnapshot() {
     std::lock_guard lock{snapshot_mutex};
-    snapshot.clear();
+    snapshots.clear();
 }
 
 void PicaCore::UpdateDebugRenderTarget() {
@@ -162,8 +168,18 @@ PicaCore::SnapshotInfo PicaCore::BuildSnapshot() {
     std::lock_guard lock{snapshot_mutex};
     header.generation = ++snapshot_generation;
     std::memcpy(data.data(), std::addressof(header), sizeof(header));
-    snapshot = std::move(data);
-    return {snapshot_generation, static_cast<u32>(snapshot.size())};
+    snapshots.push_back({snapshot_generation, std::move(data)});
+    const std::size_t byte_limit =
+        static_cast<std::size_t>(Settings::values.debugger_cache_mb.GetValue()) * 1024 * 1024;
+    std::size_t used{};
+    for (const auto& snapshot : snapshots) {
+        used += snapshot.data.size();
+    }
+    while (snapshots.size() > 1 && (snapshots.size() > 16 || used > byte_limit)) {
+        used -= snapshots.front().data.size();
+        snapshots.pop_front();
+    }
+    return {snapshot_generation, static_cast<u32>(snapshots.back().data.size())};
 }
 
 void PicaCore::InitializeRegs() {

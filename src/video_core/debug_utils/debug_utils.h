@@ -318,6 +318,7 @@ struct PicaTrace {
         u32 value;
     };
     std::vector<Write> writes;
+    bool truncated{};
 };
 
 extern std::atomic_bool g_is_pica_tracing;

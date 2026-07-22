@@ -6,10 +6,12 @@
 
 #include <algorithm>
 #include <atomic>
+#include <deque>
 #include <functional>
 #include <mutex>
 #include <vector>
 #include "common/logging/log.h"
+#include "common/settings.h"
 #include "core/hle/service/gsp/gsp_command.h"
 
 namespace VideoCore {
@@ -57,6 +59,12 @@ public:
         {
             std::lock_guard lock{history_mutex};
             gx_command_history.emplace_back(command_data);
+            const std::size_t limit = std::max<std::size_t>(
+                1, static_cast<std::size_t>(Settings::values.debugger_cache_mb.GetValue()) * 1024 *
+                       1024 / sizeof(Service::GSP::Command));
+            if (gx_command_history.size() > limit) {
+                gx_command_history.pop_front();
+            }
         }
         ForEachObserver([this](DebuggerObserver* observer) {
             observer->GXCommandProcessed(static_cast<int>(this->GetGXCommandCount()));
@@ -123,7 +131,7 @@ private:
 
     std::vector<DebuggerObserver*> observers;
     mutable std::mutex history_mutex;
-    std::vector<Service::GSP::Command> gx_command_history;
+    std::deque<Service::GSP::Command> gx_command_history;
     std::atomic_bool capture_enabled{};
 };
 

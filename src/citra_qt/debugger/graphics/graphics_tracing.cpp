@@ -207,7 +207,11 @@ void GraphicsTracingWidget::StopRecording() {
         return;
     }
 
-    context->recorder->Finish(filename.toStdString());
+    if (!context->recorder->Finish(filename.toStdString())) {
+        QMessageBox::critical(
+            this, tr("CiTrace capture incomplete"),
+            tr("The capture exceeded the configured debugger cache limit and was not saved."));
+    }
     context->recorder = nullptr;
 
     emit SetStopTracingButtonEnabled(false);

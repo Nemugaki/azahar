@@ -34,7 +34,7 @@ public:
     explicit Recorder(const InitialState& initial_state);
 
     /// Finish recording of this Citrace and save it using the given filename.
-    void Finish(const std::string& filename);
+    bool Finish(const std::string& filename);
 
     /// Mark end of a frame
     void FrameFinished();
@@ -71,6 +71,7 @@ private:
 
         /// If true, refer to data already written to the output file instead of extra_data
         bool uses_existing_data;
+        std::size_t source_index{};
     };
 
     std::vector<StreamElement> stream;
@@ -79,7 +80,11 @@ private:
      * Internal cache which maps hashes of memory contents to file offsets at which those memory
      * contents are stored.
      */
-    std::unordered_map<boost::crc_32_type::value_type /*hash*/, u32 /*file_offset*/> memory_regions;
+    std::unordered_map<boost::crc_32_type::value_type, std::vector<std::size_t>> memory_regions;
+    bool Append(StreamElement element);
+    std::size_t used_bytes{};
+    std::size_t byte_limit{};
+    bool truncated{};
 };
 
 } // namespace CiTrace

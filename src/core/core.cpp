@@ -174,21 +174,29 @@ DebugCaptureInfo System::CreateDebugCapture() {
         return {};
     }
     const DebugCaptureInfo info{capture.header.id, static_cast<u32>(capture.data.size()),
-                                capture.header.reason, capture.header.detail};
+                                capture.header.reason, capture.header.detail, false};
     {
         std::lock_guard lock{debug_mutex};
         const std::size_t limit =
             static_cast<std::size_t>(Settings::values.debugger_cache_mb.GetValue()) * 1024 * 1024;
-        if (capture.data.size() > limit) {
+        const auto size_bytes = [](const DebugCaptureRecord& entry) {
+            return entry.data.size() + entry.cores.size() * sizeof(entry.cores.front());
+        };
+        if (size_bytes(capture) > limit) {
             return {};
         }
         std::size_t used{};
         for (const auto& entry : debug_captures) {
-            used += entry.data.size();
+            used += size_bytes(entry);
         }
-        while (!debug_captures.empty() && used + capture.data.size() > limit) {
-            used -= debug_captures.front().data.size();
-            debug_captures.pop_front();
+        while (used + size_bytes(capture) > limit) {
+            const auto victim = std::ranges::find_if(
+                debug_captures, [](const auto& entry) { return !entry.pinned; });
+            if (victim == debug_captures.end()) {
+                return {};
+            }
+            used -= size_bytes(*victim);
+            debug_captures.erase(victim);
         }
         debug_captures.push_back(std::move(capture));
     }
@@ -205,7 +213,7 @@ DebugCaptureInfo System::GetDebugCaptureInfo(u32 id) const {
     if (!id && !debug_captures.empty()) {
         const auto& capture = debug_captures.back();
         return {capture.header.id, static_cast<u32>(capture.data.size()), capture.header.reason,
-                capture.header.detail};
+                capture.header.detail, capture.pinned};
     }
     const auto capture = std::ranges::find_if(debug_captures, [id](const auto& entry) {
         return entry.header.id == id;
@@ -214,7 +222,51 @@ DebugCaptureInfo System::GetDebugCaptureInfo(u32 id) const {
         return {};
     }
     return {capture->header.id, static_cast<u32>(capture->data.size()), capture->header.reason,
-            capture->header.detail};
+            capture->header.detail, capture->pinned};
+}
+
+std::vector<DebugCaptureInfo> System::ListDebugCaptures(u32 start, u32 count) const {
+    std::lock_guard lock{debug_mutex};
+    std::vector<DebugCaptureInfo> result;
+    for (u32 index = std::min(start, static_cast<u32>(debug_captures.size()));
+         index < debug_captures.size() && result.size() < count; ++index) {
+        const auto& capture = debug_captures[index];
+        result.push_back({capture.header.id, static_cast<u32>(capture.data.size()),
+                          capture.header.reason, capture.header.detail, capture.pinned});
+    }
+    return result;
+}
+
+bool System::DeleteDebugCapture(u32 id) {
+    std::lock_guard lock{debug_mutex};
+    const auto capture = std::ranges::find_if(
+        debug_captures, [id](const auto& entry) { return entry.header.id == id; });
+    if (capture == debug_captures.end()) {
+        return false;
+    }
+    debug_captures.erase(capture);
+    return true;
+}
+
+bool System::SetDebugCapturePinned(u32 id, bool pinned) {
+    std::lock_guard lock{debug_mutex};
+    const auto capture = std::ranges::find_if(
+        debug_captures, [id](const auto& entry) { return entry.header.id == id; });
+    if (capture == debug_captures.end()) {
+        return false;
+    }
+    capture->pinned = pinned;
+    return true;
+}
+
+DebugCaptureCacheInfo System::GetDebugCaptureCacheInfo() const {
+    std::lock_guard lock{debug_mutex};
+    std::size_t used{};
+    for (const auto& capture : debug_captures) {
+        used += capture.data.size() + capture.cores.size() * sizeof(capture.cores.front());
+    }
+    return {static_cast<u32>(debug_captures.size()), static_cast<u32>(used),
+            Settings::values.debugger_cache_mb.GetValue() * 1024 * 1024};
 }
 
 u32 System::ReadDebugCapture(u32 id, u32 offset, std::span<u8> output) const {

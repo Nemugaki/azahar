@@ -392,6 +392,7 @@ void RPCServer::HandlePicaTrace(Packet& packet, PicaTraceOperation operation, u3
     } else if (operation == PicaTraceOperation::Stop) {
         if (pica_trace_owned && Pica::DebugUtils::IsPicaTracing()) {
             if (auto trace = Pica::DebugUtils::FinishPicaTracing()) {
+                pica_trace_truncated = trace->truncated;
                 pica_trace_data.resize(trace->writes.size() *
                                        sizeof(Pica::DebugUtils::PicaTrace::Write));
                 if (!pica_trace_data.empty()) {
@@ -439,10 +440,11 @@ void RPCServer::HandlePicaTrace(Packet& packet, PicaTraceOperation operation, u3
         return;
     } else if (operation == PicaTraceOperation::Clear) {
         pica_trace_data.clear();
+        pica_trace_truncated = false;
     }
 
     const PicaTraceReply reply{Pica::DebugUtils::IsPicaTracing(), pica_trace_generation,
-                               static_cast<u32>(pica_trace_data.size())};
+                               static_cast<u32>(pica_trace_data.size()), pica_trace_truncated};
     std::memcpy(packet.GetPacketData().data(), &reply, sizeof(reply));
     packet.SetPacketDataSize(sizeof(reply));
     packet.SendReply();
@@ -523,11 +525,47 @@ void RPCServer::HandleDebugCapture(Packet& packet, DebugCaptureOperation operati
         packet.SendReply();
         return;
     }
+    if (operation == DebugCaptureOperation::List) {
+        const u32 max_entries =
+            (MAX_PACKET_DATA_SIZE - sizeof(u32)) / sizeof(DebugCaptureReply);
+        const auto captures = system.ListDebugCaptures(id, std::min(argument, max_entries));
+        const u32 returned = static_cast<u32>(captures.size());
+        std::memcpy(packet.GetPacketData().data(), &returned, sizeof(returned));
+        for (u32 index = 0; index < returned; ++index) {
+            const auto& info = captures[index];
+            const DebugCaptureReply reply{info.id, info.size, static_cast<u32>(info.reason),
+                                          info.detail, info.pinned};
+            std::memcpy(packet.GetPacketData().data() + sizeof(returned) + index * sizeof(reply),
+                        &reply, sizeof(reply));
+        }
+        packet.SetPacketDataSize(sizeof(returned) + returned * sizeof(DebugCaptureReply));
+        packet.SendReply();
+        return;
+    }
+    if (operation == DebugCaptureOperation::Delete) {
+        if (!system.DeleteDebugCapture(id)) {
+            SendError(packet, Error::NotFound);
+            return;
+        }
+    } else if (operation == DebugCaptureOperation::Pin) {
+        if (!system.SetDebugCapturePinned(id, argument != 0)) {
+            SendError(packet, Error::NotFound);
+            return;
+        }
+    } else if (operation == DebugCaptureOperation::CacheStatus) {
+        const auto info = system.GetDebugCaptureCacheInfo();
+        const DebugCaptureCacheReply reply{info.count, info.used, info.limit};
+        std::memcpy(packet.GetPacketData().data(), &reply, sizeof(reply));
+        packet.SetPacketDataSize(sizeof(reply));
+        packet.SendReply();
+        return;
+    }
 
     const auto info = operation == DebugCaptureOperation::Create
                           ? system.CreateDebugCapture()
                           : system.GetDebugCaptureInfo(id);
-    const DebugCaptureReply reply{info.id, info.size, static_cast<u32>(info.reason), info.detail};
+    const DebugCaptureReply reply{info.id, info.size, static_cast<u32>(info.reason), info.detail,
+                                  info.pinned};
     std::memcpy(packet.GetPacketData().data(), &reply, sizeof(reply));
     packet.SetPacketDataSize(sizeof(reply));
     packet.SendReply();

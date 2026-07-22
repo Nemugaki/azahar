@@ -98,7 +98,16 @@ enum class PicaShaderOperation : u32 {
 
 enum class DebugStateOperation : u32 { Status = 0, Wait = 1 };
 
-enum class DebugCaptureOperation : u32 { Create = 0, Status = 1, Read = 2, Diff = 3 };
+enum class DebugCaptureOperation : u32 {
+    Create = 0,
+    Status = 1,
+    Read = 2,
+    Diff = 3,
+    List = 4,
+    Delete = 5,
+    Pin = 6,
+    CacheStatus = 7,
+};
 
 enum class Error : u32 {
     InvalidPacket = 1,
@@ -127,6 +136,13 @@ struct DebugCaptureReply {
     u32 size;
     u32 reason;
     u32 detail;
+    u32 flags;
+};
+
+struct DebugCaptureCacheReply {
+    u32 count;
+    u32 used;
+    u32 limit;
 };
 
 struct DebugCaptureDiffReply {
@@ -194,6 +210,7 @@ struct PicaTraceReply {
     u32 active;
     u32 generation;
     u32 size;
+    u32 truncated;
 };
 
 enum class EmulationResult : u32 {

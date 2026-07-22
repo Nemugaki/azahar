@@ -125,6 +125,13 @@ struct DebugCaptureInfo {
     u32 size{};
     DebugPauseReason reason{DebugPauseReason::Stopped};
     u32 detail{};
+    bool pinned{};
+};
+
+struct DebugCaptureCacheInfo {
+    u32 count{};
+    u32 used{};
+    u32 limit{};
 };
 
 struct DebugCaptureDiff {
@@ -444,6 +451,10 @@ public:
     DebugCaptureInfo CreateDebugCapture();
     void ClearDebugCaptures();
     DebugCaptureInfo GetDebugCaptureInfo(u32 id = 0) const;
+    std::vector<DebugCaptureInfo> ListDebugCaptures(u32 start, u32 count) const;
+    bool DeleteDebugCapture(u32 id);
+    bool SetDebugCapturePinned(u32 id, bool pinned);
+    DebugCaptureCacheInfo GetDebugCaptureCacheInfo() const;
     u32 ReadDebugCapture(u32 id, u32 offset, std::span<u8> output) const;
     std::vector<DebugCaptureDiff> DiffDebugCaptures(u32 before_id, u32 after_id, u32 start,
                                                     u32 count) const;
@@ -623,6 +634,7 @@ private:
         DebugCaptureHeader header;
         std::vector<ARM_Interface::RegisterSnapshot> cores;
         std::vector<u8> data;
+        bool pinned{};
     };
     mutable std::mutex debug_mutex;
     mutable std::condition_variable debug_changed;

@@ -74,6 +74,7 @@ private:
     std::vector<u8> pica_trace_data;
     u32 pica_trace_generation = 0;
     bool pica_trace_owned = false;
+    bool pica_trace_truncated = false;
     std::vector<u8> pica_shader_dump;
     std::vector<PicaShaderCycle> pica_shader_cycles;
     u32 pica_shader_generation = 0;

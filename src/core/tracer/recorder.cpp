@@ -2,17 +2,35 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
+#include <algorithm>
 #include <cstring>
 #include "common/assert.h"
 #include "common/file_util.h"
 #include "common/logging/log.h"
+#include "common/settings.h"
 #include "core/tracer/recorder.h"
 
 namespace CiTrace {
 
-Recorder::Recorder(const InitialState& initial_state) : initial_state(initial_state) {}
+Recorder::Recorder(const InitialState& initial_state) : initial_state(initial_state) {
+    byte_limit = static_cast<std::size_t>(Settings::values.debugger_cache_mb.GetValue()) * 1024 *
+                 1024;
+    used_bytes = initial_state.lcd_registers.size() * sizeof(u32) +
+                 initial_state.pica_registers.size() * sizeof(u32) +
+                 initial_state.default_attributes.size() * sizeof(u32) +
+                 initial_state.vs_program_binary.size() * sizeof(u32) +
+                 initial_state.vs_swizzle_data.size() * sizeof(u32) +
+                 initial_state.vs_float_uniforms.size() * sizeof(u32) +
+                 initial_state.gs_program_binary.size() * sizeof(u32) +
+                 initial_state.gs_swizzle_data.size() * sizeof(u32) +
+                 initial_state.gs_float_uniforms.size() * sizeof(u32);
+}
 
-void Recorder::Finish(const std::string& filename) {
+bool Recorder::Finish(const std::string& filename) {
+    if (truncated) {
+        LOG_ERROR(HW_GPU, "CiTrace exceeded the debugger cache limit; refusing incomplete file");
+        return false;
+    }
     // Setup CiTrace header
     CTHeader header{};
     std::memcpy(header.magic, CTHeader::ExpectedMagicWord(), 4);
@@ -53,14 +71,17 @@ void Recorder::Finish(const std::string& filename) {
     header.stream_offset = initial.gs_float_uniforms + initial.gs_float_uniforms_size * sizeof(u32);
 
     // Iterate through stream elements, update relevant stream element data
-    for (auto& stream_element : stream) {
+    std::vector<u32> memory_offsets(stream.size());
+    for (std::size_t index = 0; index < stream.size(); ++index) {
+        auto& stream_element = stream[index];
         switch (stream_element.data.type) {
         case MemoryLoad: {
-            auto& file_offset = memory_regions[stream_element.hash];
             if (!stream_element.uses_existing_data) {
-                file_offset = header.stream_offset;
+                memory_offsets[index] = header.stream_offset;
+            } else {
+                memory_offsets[index] = memory_offsets[stream_element.source_index];
             }
-            stream_element.data.memory_load.file_offset = file_offset;
+            stream_element.data.memory_load.file_offset = memory_offsets[index];
             break;
         }
 
@@ -154,11 +175,13 @@ void Recorder::Finish(const std::string& filename) {
         }
     } catch (const char* str) {
         LOG_ERROR(HW_GPU, "Writing CiTrace file failed: {}", str);
+        return false;
     }
+    return true;
 }
 
 void Recorder::FrameFinished() {
-    stream.push_back({{FrameMarker}});
+    Append({{FrameMarker}});
 }
 
 void Recorder::MemoryAccessed(const u8* data, u32 size, u32 physical_address) {
@@ -171,14 +194,27 @@ void Recorder::MemoryAccessed(const u8* data, u32 size, u32 physical_address) {
     result.process_bytes(data, size);
     element.hash = result.checksum();
 
-    element.uses_existing_data = (memory_regions.find(element.hash) != memory_regions.end());
+    const auto region = memory_regions.find(element.hash);
+    if (region != memory_regions.end()) {
+        const auto match = std::ranges::find_if(region->second, [&](std::size_t index) {
+            const auto& existing = stream[index].extra_data;
+            return existing.size() == size && std::memcmp(existing.data(), data, size) == 0;
+        });
+        element.uses_existing_data = match != region->second.end();
+        if (element.uses_existing_data) {
+            element.source_index = *match;
+        }
+    }
     if (!element.uses_existing_data) {
         element.extra_data.resize(size);
         std::memcpy(element.extra_data.data(), data, size);
-        memory_regions.insert({element.hash, 0}); // file offset will be initialized in Finish()
     }
 
-    stream.push_back(element);
+    const bool stores_new_data = !element.uses_existing_data;
+    const std::size_t stream_index = stream.size();
+    if (Append(std::move(element)) && stores_new_data) {
+        memory_regions[result.checksum()].push_back(stream_index);
+    }
 }
 
 void Recorder::RegisterWritten(u32 physical_address, u32 value) {
@@ -186,7 +222,18 @@ void Recorder::RegisterWritten(u32 physical_address, u32 value) {
     element.data.register_write.physical_address = physical_address;
     element.data.register_write.value = value;
 
-    stream.push_back(element);
+    Append(std::move(element));
+}
+
+bool Recorder::Append(StreamElement element) {
+    const std::size_t size = sizeof(CTStreamElement) + element.extra_data.size();
+    if (used_bytes + size > byte_limit) {
+        truncated = true;
+        return false;
+    }
+    used_bytes += size;
+    stream.push_back(std::move(element));
+    return true;
 }
 
 } // namespace CiTrace

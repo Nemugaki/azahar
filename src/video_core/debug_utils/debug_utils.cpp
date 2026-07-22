@@ -12,6 +12,7 @@
 #include <nihstro/shader_binary.h>
 #include "common/assert.h"
 #include "common/bit_field.h"
+#include "common/settings.h"
 #include "common/vector_math.h"
 #include "core/core.h"
 #include "video_core/debug_utils/debug_utils.h"
@@ -498,7 +499,14 @@ void OnPicaRegWrite(u16 cmd_id, u16 mask, u32 value) {
 
     std::lock_guard lock(pica_trace_mutex);
     if (pica_trace) {
-        pica_trace->writes.push_back(PicaTrace::Write{cmd_id, mask, value});
+        const std::size_t max_writes =
+            static_cast<std::size_t>(Settings::values.debugger_cache_mb.GetValue()) * 1024 * 1024 /
+            sizeof(PicaTrace::Write);
+        if (pica_trace->writes.size() < max_writes) {
+            pica_trace->writes.push_back(PicaTrace::Write{cmd_id, mask, value});
+        } else {
+            pica_trace->truncated = true;
+        }
     }
 }
 
