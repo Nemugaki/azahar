@@ -662,6 +662,7 @@ struct Values {
     Setting<bool> enable_rpc_server{true, Keys::enable_rpc_server};
     Setting<u16> rpc_server_port{45987, Keys::rpc_server_port};
     Setting<bool> rpc_allow_memory{true, Keys::rpc_allow_memory};
+    Setting<bool> rpc_allow_memory_write{false, Keys::rpc_allow_memory_write};
     Setting<bool> rpc_allow_emulation_control{true, Keys::rpc_allow_emulation_control};
     Setting<bool> rpc_allow_cpu_registers{true, Keys::rpc_allow_cpu_registers};
     Setting<bool> rpc_allow_graphics_debugger{true, Keys::rpc_allow_graphics_debugger};

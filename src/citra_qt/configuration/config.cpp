@@ -526,6 +526,7 @@ void QtConfig::ReadDebuggingValues() {
     ReadBasicSetting(Settings::values.enable_rpc_server);
     ReadBasicSetting(Settings::values.rpc_server_port);
     ReadBasicSetting(Settings::values.rpc_allow_memory);
+    ReadBasicSetting(Settings::values.rpc_allow_memory_write);
     ReadBasicSetting(Settings::values.rpc_allow_emulation_control);
     ReadBasicSetting(Settings::values.rpc_allow_cpu_registers);
     ReadBasicSetting(Settings::values.rpc_allow_graphics_debugger);
@@ -1130,6 +1131,7 @@ void QtConfig::SaveDebuggingValues() {
     WriteBasicSetting(Settings::values.enable_rpc_server);
     WriteBasicSetting(Settings::values.rpc_server_port);
     WriteBasicSetting(Settings::values.rpc_allow_memory);
+    WriteBasicSetting(Settings::values.rpc_allow_memory_write);
     WriteBasicSetting(Settings::values.rpc_allow_emulation_control);
     WriteBasicSetting(Settings::values.rpc_allow_cpu_registers);
     WriteBasicSetting(Settings::values.rpc_allow_graphics_debugger);

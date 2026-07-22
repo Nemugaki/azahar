@@ -100,6 +100,22 @@ enum class DebugStateOperation : u32 { Status = 0, Wait = 1 };
 
 enum class DebugCaptureOperation : u32 { Create = 0, Status = 1, Read = 2, Diff = 3 };
 
+enum class Error : u32 {
+    InvalidPacket = 1,
+    PermissionDenied = 2,
+    InvalidState = 3,
+    InvalidArgument = 4,
+    Unsupported = 5,
+    NotFound = 6,
+    Busy = 7,
+    Failed = 8,
+};
+
+struct ErrorReply {
+    u32 magic;
+    Error error;
+};
+
 struct DebugStateReply {
     u32 reason;
     u32 detail;
@@ -213,7 +229,8 @@ struct ProcessInfo {
 static_assert(sizeof(ProcessInfo) == 0x14, "Incorrect ProcessInfo size");
 #pragma pack(pop)
 
-constexpr u32 CURRENT_VERSION = 1;
+constexpr u32 CURRENT_VERSION = 2;
+constexpr u32 ERROR_REPLY_MAGIC = 0x52504345; // "ECPR" on little-endian hosts.
 constexpr u32 MIN_PACKET_SIZE = sizeof(PacketHeader);
 constexpr u32 MAX_PACKET_DATA_SIZE = 1024;
 constexpr u32 MAX_PACKET_SIZE = MIN_PACKET_SIZE + MAX_PACKET_DATA_SIZE;
@@ -229,6 +246,12 @@ constexpr u32 CAPABILITY_PICA_SHADER = 1U << 6;
 constexpr u32 CAPABILITY_MEMORY_ACCESS = 1U << 7;
 constexpr u32 CAPABILITY_SAVE_STATES = 1U << 8;
 constexpr u32 CAPABILITY_SCREENSHOTS = 1U << 9;
+constexpr u32 CAPABILITY_MEMORY_WRITE = 1U << 10;
+constexpr u32 CAPABILITY_PICA_TIMELINE = 1U << 11;
+constexpr u32 CAPABILITY_PICA_RENDER_TARGET = 1U << 12;
+constexpr u32 CAPABILITY_DEBUG_STATE = 1U << 13;
+constexpr u32 CAPABILITY_DEBUG_CAPTURE = 1U << 14;
+constexpr u32 CAPABILITY_ERROR_REPLIES = 1U << 15;
 
 class Packet {
 public:
@@ -270,7 +293,7 @@ public:
 
 private:
     struct PacketHeader header;
-    std::array<u8, MAX_PACKET_DATA_SIZE> packet_data;
+    std::array<u8, MAX_PACKET_DATA_SIZE> packet_data{};
 
     std::function<void(Packet&)> send_reply_callback;
 };

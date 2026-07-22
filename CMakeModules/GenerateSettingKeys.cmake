@@ -120,6 +120,7 @@ foreach(KEY IN ITEMS
     "enable_rpc_server"
     "rpc_server_port"
     "rpc_allow_memory"
+    "rpc_allow_memory_write"
     "rpc_allow_emulation_control"
     "rpc_allow_cpu_registers"
     "rpc_allow_graphics_debugger"

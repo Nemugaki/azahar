@@ -57,7 +57,8 @@ private:
     u32 GetEnabledCapabilities() const;
     bool IsPacketTypeEnabled(PacketType packet_type) const;
     bool IsEmulationControlEnabled(EmulationControl operation) const;
-    bool ValidatePacket(const PacketHeader& packet_header);
+    bool ValidatePacket(const PacketHeader& packet_header) const;
+    void SendError(Packet& packet, Error error) const;
     void HandleSingleRequest(std::unique_ptr<Packet> request);
     void HandleRequestsLoop(std::stop_token stop_token);
 

@@ -17,6 +17,25 @@
 
 namespace Core::RPC {
 
+namespace {
+
+bool IsInsideRegion(u32 address, std::size_t size, u32 begin, u32 last) {
+    const u64 end = static_cast<u64>(address) + size;
+    return size != 0 && address >= begin && end <= static_cast<u64>(last) + 1;
+}
+
+bool IsWritableMemoryRange(u32 address, std::size_t size) {
+    return IsInsideRegion(address, size, Memory::PROCESS_IMAGE_VADDR,
+                          Memory::PROCESS_IMAGE_VADDR_END) ||
+           IsInsideRegion(address, size, Memory::HEAP_VADDR, Memory::HEAP_VADDR_END) ||
+           IsInsideRegion(address, size, Memory::LINEAR_HEAP_VADDR,
+                          Memory::LINEAR_HEAP_VADDR_END) ||
+           IsInsideRegion(address, size, Memory::N3DS_EXTRA_RAM_VADDR,
+                          Memory::N3DS_EXTRA_RAM_VADDR_END);
+}
+
+} // namespace
+
 RPCServer::RPCServer(Core::System& system_, EmulationControlHandler emulation_control_handler_)
     : system{system_}, emulation_control_handler{std::move(emulation_control_handler_)} {
     LOG_INFO(RPC_Server, "Starting RPC server.");
@@ -60,16 +79,11 @@ void RPCServer::HandleReadMemory(Packet& packet, u32 address, u32 data_size) {
 
 void RPCServer::HandleWriteMemory(Packet& packet, u32 address, std::span<const u8> data) {
     if (!system.IsPoweredOn()) {
-        packet.SetPacketDataSize(0);
-        packet.SendReply();
+        SendError(packet, Error::InvalidState);
         return;
     }
 
-    // Only allow writing to certain memory regions
-    if ((address >= Memory::PROCESS_IMAGE_VADDR && address <= Memory::PROCESS_IMAGE_VADDR_END) ||
-        (address >= Memory::HEAP_VADDR && address <= Memory::HEAP_VADDR_END) ||
-        (address >= Memory::LINEAR_HEAP_VADDR && address <= Memory::LINEAR_HEAP_VADDR_END) ||
-        (address >= Memory::N3DS_EXTRA_RAM_VADDR && address <= Memory::N3DS_EXTRA_RAM_VADDR_END)) {
+    if (IsWritableMemoryRange(address, data.size())) {
         // Note: Memory write occurs asynchronously from the state of the emulator
         if (selected_pid == 0xFFFFFFFF) {
             LOG_ERROR(RPC_Server, "No target process selected, memory access may be invalid.");
@@ -80,6 +94,8 @@ void RPCServer::HandleWriteMemory(Packet& packet, u32 address, std::span<const u
                 system.Memory().WriteBlock(*process, address, data.data(), data.size());
             } else {
                 LOG_ERROR(RPC_Server, "Selected process does not exist.");
+                SendError(packet, Error::NotFound);
+                return;
             }
         }
 
@@ -87,6 +103,9 @@ void RPCServer::HandleWriteMemory(Packet& packet, u32 address, std::span<const u
 
         // Is current core correct here?
         system.InvalidateCacheRange(address, data.size());
+    } else {
+        SendError(packet, Error::InvalidArgument);
+        return;
     }
     packet.SetPacketDataSize(0);
     packet.SendReply();
@@ -154,9 +173,12 @@ u32 RPCServer::GetEnabledCapabilities() const {
         return 0;
     }
 
-    u32 capabilities = 0;
+    u32 capabilities = CAPABILITY_ERROR_REPLIES;
     if (Settings::values.rpc_allow_memory.GetValue()) {
         capabilities |= CAPABILITY_MEMORY_ACCESS;
+    }
+    if (Settings::values.rpc_allow_memory_write.GetValue()) {
+        capabilities |= CAPABILITY_MEMORY_WRITE;
     }
     if (Settings::values.rpc_allow_emulation_control.GetValue()) {
         capabilities |= CAPABILITY_EMULATION_CONTROL;
@@ -175,17 +197,24 @@ u32 RPCServer::GetEnabledCapabilities() const {
     }
     if (Settings::values.pica_debugging.GetValue()) {
         if (Settings::values.rpc_allow_pica_snapshot.GetValue()) {
-            capabilities |= CAPABILITY_PICA_SNAPSHOT;
+            capabilities |= CAPABILITY_PICA_SNAPSHOT | CAPABILITY_PICA_RENDER_TARGET;
         }
         if (Settings::values.rpc_allow_pica_breakpoints.GetValue()) {
             capabilities |= CAPABILITY_PICA_BREAKPOINT;
         }
         if (Settings::values.rpc_allow_pica_command_list.GetValue()) {
-            capabilities |= CAPABILITY_PICA_TRACE;
+            capabilities |= CAPABILITY_PICA_TRACE | CAPABILITY_PICA_TIMELINE;
         }
         if (Settings::values.rpc_allow_pica_vertex_shader.GetValue()) {
             capabilities |= CAPABILITY_PICA_SHADER;
         }
+    }
+    if (capabilities & CAPABILITY_EMULATION_CONTROL) {
+        capabilities |= CAPABILITY_DEBUG_STATE;
+    }
+    if ((capabilities & (CAPABILITY_CPU_REGISTERS | CAPABILITY_PICA_SNAPSHOT)) ==
+        (CAPABILITY_CPU_REGISTERS | CAPABILITY_PICA_SNAPSHOT)) {
+        capabilities |= CAPABILITY_DEBUG_CAPTURE;
     }
     return capabilities;
 }
@@ -196,10 +225,11 @@ bool RPCServer::IsPacketTypeEnabled(PacketType packet_type) const {
     case PacketType::Capabilities:
         return true;
     case PacketType::ReadMemory:
-    case PacketType::WriteMemory:
     case PacketType::ProcessList:
     case PacketType::SetGetProcess:
         return capabilities & CAPABILITY_MEMORY_ACCESS;
+    case PacketType::WriteMemory:
+        return capabilities & CAPABILITY_MEMORY_WRITE;
     case PacketType::EmulationControl:
         return capabilities &
                (CAPABILITY_EMULATION_CONTROL | CAPABILITY_SAVE_STATES | CAPABILITY_SCREENSHOTS);
@@ -212,17 +242,17 @@ bool RPCServer::IsPacketTypeEnabled(PacketType packet_type) const {
     case PacketType::PicaBreakpoint:
         return capabilities & CAPABILITY_PICA_BREAKPOINT;
     case PacketType::PicaTrace:
-    case PacketType::PicaTimeline:
         return capabilities & CAPABILITY_PICA_TRACE;
+    case PacketType::PicaTimeline:
+        return capabilities & CAPABILITY_PICA_TIMELINE;
     case PacketType::PicaRenderTarget:
-        return capabilities & CAPABILITY_PICA_SNAPSHOT;
+        return capabilities & CAPABILITY_PICA_RENDER_TARGET;
     case PacketType::PicaShader:
         return capabilities & CAPABILITY_PICA_SHADER;
     case PacketType::DebugState:
-        return capabilities & CAPABILITY_EMULATION_CONTROL;
+        return capabilities & CAPABILITY_DEBUG_STATE;
     case PacketType::DebugCapture:
-        return (capabilities & (CAPABILITY_CPU_REGISTERS | CAPABILITY_PICA_SNAPSHOT)) ==
-               (CAPABILITY_CPU_REGISTERS | CAPABILITY_PICA_SNAPSHOT);
+        return capabilities & CAPABILITY_DEBUG_CAPTURE;
     default:
         return false;
     }
@@ -708,45 +738,64 @@ void RPCServer::HandleEmulationControl(Packet& packet, EmulationControl operatio
     packet.SendReply();
 }
 
-bool RPCServer::ValidatePacket(const PacketHeader& packet_header) {
-    if (packet_header.version <= CURRENT_VERSION) {
-        switch (packet_header.packet_type) {
-        case PacketType::ReadMemory:
-        case PacketType::WriteMemory:
-        case PacketType::ProcessList:
-        case PacketType::SetGetProcess:
-            if (packet_header.packet_size >= (sizeof(u32) * 2)) {
-                return true;
-            }
-            break;
-        case PacketType::Capabilities:
-            return packet_header.packet_size == 0;
-        case PacketType::EmulationControl:
-            return packet_header.packet_size >= sizeof(u32);
-        case PacketType::PicaSnapshot:
-        case PacketType::PicaBreakpoint:
-        case PacketType::PicaTrace:
-        case PacketType::CPURegisters:
-        case PacketType::GXCommandTrace:
-        case PacketType::PicaShader:
-        case PacketType::PicaTimeline:
-        case PacketType::PicaRenderTarget:
-        case PacketType::DebugState:
-        case PacketType::DebugCapture:
-            return packet_header.packet_size >= sizeof(u32);
-        default:
-            break;
-        }
+bool RPCServer::ValidatePacket(const PacketHeader& header) const {
+    if (header.version == 0 || header.version > CURRENT_VERSION ||
+        header.packet_size > MAX_PACKET_DATA_SIZE) {
+        return false;
     }
-    return false;
+    switch (header.packet_type) {
+    case PacketType::ReadMemory:
+    case PacketType::ProcessList:
+    case PacketType::SetGetProcess:
+        return header.packet_size == 2 * sizeof(u32);
+    case PacketType::WriteMemory:
+        return header.packet_size > 2 * sizeof(u32);
+    case PacketType::Capabilities:
+        return header.packet_size == 0;
+    case PacketType::EmulationControl:
+        return header.packet_size >= sizeof(u32);
+    case PacketType::PicaSnapshot:
+        return header.packet_size >= sizeof(u32) && header.packet_size <= 4 * sizeof(u32);
+    case PacketType::PicaBreakpoint:
+    case PacketType::PicaTrace:
+    case PacketType::PicaShader:
+    case PacketType::PicaTimeline:
+    case PacketType::DebugCapture:
+        return header.packet_size >= sizeof(u32) && header.packet_size <= 5 * sizeof(u32);
+    case PacketType::CPURegisters:
+        return header.packet_size == 3 * sizeof(u32) ||
+               header.packet_size == 4 * sizeof(u32);
+    case PacketType::GXCommandTrace:
+    case PacketType::DebugState:
+        return header.packet_size >= sizeof(u32) && header.packet_size <= 4 * sizeof(u32);
+    case PacketType::PicaRenderTarget:
+        return header.packet_size == sizeof(u32);
+    default:
+        return false;
+    }
+}
+
+void RPCServer::SendError(Packet& packet, Error error) const {
+    const ErrorReply reply{ERROR_REPLY_MAGIC, error};
+    std::memcpy(packet.GetPacketData().data(), &reply, sizeof(reply));
+    packet.SetPacketDataSize(sizeof(reply));
+    packet.SendReply();
 }
 
 void RPCServer::HandleSingleRequest(std::unique_ptr<Packet> request_packet) {
     bool success = false;
     const auto packet_data = request_packet->GetPacketData();
 
-    if (IsPacketTypeEnabled(request_packet->GetPacketType()) &&
-        ValidatePacket(request_packet->GetHeader())) {
+    if (!ValidatePacket(request_packet->GetHeader())) {
+        SendError(*request_packet, Error::InvalidPacket);
+        return;
+    }
+    if (!IsPacketTypeEnabled(request_packet->GetPacketType())) {
+        SendError(*request_packet, Error::PermissionDenied);
+        return;
+    }
+
+    {
         // Legacy request types use two arguments.
         u32 arg1 = 0;
         u32 arg2 = 0;
@@ -765,7 +814,8 @@ void RPCServer::HandleSingleRequest(std::unique_ptr<Packet> request_packet) {
             }
             break;
         case PacketType::WriteMemory:
-            if (arg2 > 0 && arg2 <= MAX_PACKET_DATA_SIZE - (sizeof(u32) * 2)) {
+            if (arg2 > 0 && arg2 <= MAX_PACKET_DATA_SIZE - (sizeof(u32) * 2) &&
+                request_packet->GetPacketDataSize() == 2 * sizeof(u32) + arg2) {
                 const auto data = packet_data.subspan(sizeof(u32) * 2, arg2);
                 HandleWriteMemory(*request_packet, arg1, data);
                 success = true;
@@ -785,7 +835,17 @@ void RPCServer::HandleSingleRequest(std::unique_ptr<Packet> request_packet) {
             break;
         case PacketType::EmulationControl: {
             const auto operation = static_cast<EmulationControl>(arg1);
+            if (arg1 > static_cast<u32>(EmulationControl::FrameAdvance)) {
+                break;
+            }
             if (!IsEmulationControlEnabled(operation)) {
+                SendError(*request_packet, Error::PermissionDenied);
+                return;
+            }
+            if (request_packet->GetPacketDataSize() > sizeof(u32) &&
+                operation != EmulationControl::Run && operation != EmulationControl::SaveState &&
+                operation != EmulationControl::LoadState &&
+                operation != EmulationControl::Screenshot) {
                 break;
             }
             const auto path_size = request_packet->GetPacketDataSize() - sizeof(u32);
@@ -956,9 +1016,7 @@ void RPCServer::HandleSingleRequest(std::unique_ptr<Packet> request_packet) {
     }
 
     if (!success) {
-        // Send an empty reply, so as not to hang the client
-        request_packet->SetPacketDataSize(0);
-        request_packet->SendReply();
+        SendError(*request_packet, Error::InvalidArgument);
     }
 }
 

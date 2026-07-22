@@ -138,6 +138,7 @@ void ConfigureDebug::SetConfiguration() {
     ui->enable_rpc_server->setChecked(Settings::values.enable_rpc_server.GetValue());
     ui->rpc_server_port->setValue(Settings::values.rpc_server_port.GetValue());
     ui->rpc_allow_memory->setChecked(Settings::values.rpc_allow_memory.GetValue());
+    ui->rpc_allow_memory_write->setChecked(Settings::values.rpc_allow_memory_write.GetValue());
     ui->rpc_allow_emulation_control->setChecked(
         Settings::values.rpc_allow_emulation_control.GetValue());
     ui->rpc_allow_cpu_registers->setChecked(Settings::values.rpc_allow_cpu_registers.GetValue());
@@ -206,6 +207,7 @@ void ConfigureDebug::ApplyConfiguration() {
     Settings::values.enable_rpc_server = ui->enable_rpc_server->isChecked();
     Settings::values.rpc_server_port = static_cast<u16>(ui->rpc_server_port->value());
     Settings::values.rpc_allow_memory = ui->rpc_allow_memory->isChecked();
+    Settings::values.rpc_allow_memory_write = ui->rpc_allow_memory_write->isChecked();
     Settings::values.rpc_allow_emulation_control = ui->rpc_allow_emulation_control->isChecked();
     Settings::values.rpc_allow_cpu_registers = ui->rpc_allow_cpu_registers->isChecked();
     Settings::values.rpc_allow_graphics_debugger = ui->rpc_allow_graphics_debugger->isChecked();
@@ -254,6 +256,7 @@ void ConfigureDebug::UpdateRPCControls() {
     const bool enabled = ui->enable_rpc_server->isChecked();
     ui->rpc_server_port->setEnabled(!is_powered_on && enabled);
     ui->rpc_allow_memory->setEnabled(enabled);
+    ui->rpc_allow_memory_write->setEnabled(enabled);
     ui->rpc_allow_emulation_control->setEnabled(enabled);
     ui->rpc_allow_cpu_registers->setEnabled(enabled);
     ui->rpc_allow_graphics_debugger->setEnabled(enabled);

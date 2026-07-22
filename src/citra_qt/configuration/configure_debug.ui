@@ -129,41 +129,51 @@
        </widget>
       </item>
       <item row="2" column="0" colspan="4">
+       <widget class="QCheckBox" name="rpc_allow_memory_write">
+        <property name="text">
+         <string>Allow guest memory writes</string>
+        </property>
+        <property name="toolTip">
+         <string>Permits mutation of guest process, heap, and linear-memory regions.</string>
+        </property>
+       </widget>
+      </item>
+      <item row="3" column="0" colspan="4">
        <widget class="QCheckBox" name="rpc_allow_emulation_control">
         <property name="text">
          <string>Allow run, stop, restart, and pause</string>
         </property>
        </widget>
       </item>
-      <item row="3" column="0" colspan="4">
+      <item row="4" column="0" colspan="4">
        <widget class="QCheckBox" name="rpc_allow_cpu_registers">
         <property name="text">
          <string>Allow ARM register access</string>
         </property>
        </widget>
       </item>
-      <item row="4" column="0" colspan="4">
+      <item row="5" column="0" colspan="4">
        <widget class="QCheckBox" name="rpc_allow_graphics_debugger">
         <property name="text">
          <string>Allow Graphics Debugger access</string>
         </property>
        </widget>
       </item>
-      <item row="5" column="0" colspan="4">
+      <item row="6" column="0" colspan="4">
        <widget class="QCheckBox" name="rpc_allow_save_states">
         <property name="text">
          <string>Allow save-state loading and saving</string>
         </property>
        </widget>
       </item>
-      <item row="6" column="0" colspan="4">
+      <item row="7" column="0" colspan="4">
        <widget class="QCheckBox" name="rpc_allow_screenshots">
         <property name="text">
          <string>Allow screenshots to explicit host paths</string>
         </property>
        </widget>
       </item>
-      <item row="7" column="0" colspan="4">
+      <item row="8" column="0" colspan="4">
        <widget class="QCheckBox" name="rpc_allow_pica_snapshot">
         <property name="text">
          <string>Allow PICA200 state snapshots</string>
@@ -173,7 +183,7 @@
         </property>
        </widget>
       </item>
-      <item row="8" column="0" colspan="4">
+      <item row="9" column="0" colspan="4">
        <widget class="QCheckBox" name="rpc_allow_pica_breakpoints">
         <property name="text">
          <string>Allow PICA200 breakpoints</string>
@@ -183,7 +193,7 @@
         </property>
        </widget>
       </item>
-      <item row="9" column="0" colspan="4">
+      <item row="10" column="0" colspan="4">
        <widget class="QCheckBox" name="rpc_allow_pica_command_list">
         <property name="text">
          <string>Allow PICA command-list tracing</string>
@@ -193,7 +203,7 @@
         </property>
        </widget>
       </item>
-      <item row="10" column="0" colspan="4">
+      <item row="11" column="0" colspan="4">
        <widget class="QCheckBox" name="rpc_allow_pica_vertex_shader">
         <property name="text">
          <string>Allow PICA vertex-shader access</string>
@@ -203,7 +213,7 @@
         </property>
        </widget>
       </item>
-      <item row="11" column="0" colspan="4">
+      <item row="12" column="0" colspan="4">
        <widget class="QLabel" name="rpc_server_info">
         <property name="text">
          <string>Available before and between games. Server and port changes require restarting Azahar.</string>
