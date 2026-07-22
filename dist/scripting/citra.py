@@ -35,6 +35,9 @@ class EmulationControl(enum.IntEnum):
     Restart = 5
     DebugPause = 6
     DebugResume = 7
+    SaveState = 8
+    LoadState = 9
+    Screenshot = 10
 
 class EmulationState(enum.IntEnum):
     Stopped = 0
@@ -109,6 +112,15 @@ class Citra:
 
     def debug_resume(self):
         return self.emulation_control(EmulationControl.DebugResume)
+
+    def save_state(self, slot):
+        return self.emulation_control(EmulationControl.SaveState, str(slot))
+
+    def load_state(self, slot):
+        return self.emulation_control(EmulationControl.LoadState, str(slot))
+
+    def screenshot(self, path):
+        return self.emulation_control(EmulationControl.Screenshot, str(path))
 
     def pica_snapshot_status(self):
         reply = self._request(RequestType.PicaSnapshot, struct.pack("I", 1))

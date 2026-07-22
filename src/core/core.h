@@ -387,7 +387,8 @@ public:
     }
 
 #ifdef ENABLE_SCRIPTING
-    void StartRPCServer(RPC::EmulationControlHandler emulation_control_handler);
+    void StartRPCServer(RPC::EmulationControlHandler emulation_control_handler,
+                        RPC::ClientCountHandler client_count_handler);
     void StopRPCServer();
 #endif
 

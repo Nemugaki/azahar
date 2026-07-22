@@ -7,6 +7,7 @@
 #include <functional>
 #include <memory>
 #include "common/common_types.h"
+#include "core/rpc/packet.h"
 
 namespace Core::RPC {
 
@@ -16,7 +17,8 @@ u16 GetRPCPort();
 
 class UDPServer {
 public:
-    explicit UDPServer(std::function<void(std::unique_ptr<Packet>)> new_request_callback);
+    UDPServer(std::function<void(std::unique_ptr<Packet>)> new_request_callback,
+              ClientCountHandler client_count_handler);
     ~UDPServer();
 
 private:

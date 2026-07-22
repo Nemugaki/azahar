@@ -528,6 +528,8 @@ void QtConfig::ReadDebuggingValues() {
     ReadBasicSetting(Settings::values.rpc_allow_emulation_control);
     ReadBasicSetting(Settings::values.rpc_allow_cpu_registers);
     ReadBasicSetting(Settings::values.rpc_allow_graphics_debugger);
+    ReadBasicSetting(Settings::values.rpc_allow_save_states);
+    ReadBasicSetting(Settings::values.rpc_allow_screenshots);
     ReadBasicSetting(Settings::values.rpc_allow_pica_snapshot);
     ReadBasicSetting(Settings::values.rpc_allow_pica_breakpoints);
     ReadBasicSetting(Settings::values.rpc_allow_pica_command_list);
@@ -1128,6 +1130,8 @@ void QtConfig::SaveDebuggingValues() {
     WriteBasicSetting(Settings::values.rpc_allow_emulation_control);
     WriteBasicSetting(Settings::values.rpc_allow_cpu_registers);
     WriteBasicSetting(Settings::values.rpc_allow_graphics_debugger);
+    WriteBasicSetting(Settings::values.rpc_allow_save_states);
+    WriteBasicSetting(Settings::values.rpc_allow_screenshots);
     WriteBasicSetting(Settings::values.rpc_allow_pica_snapshot);
     WriteBasicSetting(Settings::values.rpc_allow_pica_breakpoints);
     WriteBasicSetting(Settings::values.rpc_allow_pica_command_list);

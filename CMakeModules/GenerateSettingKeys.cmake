@@ -122,6 +122,8 @@ foreach(KEY IN ITEMS
     "rpc_allow_emulation_control"
     "rpc_allow_cpu_registers"
     "rpc_allow_graphics_debugger"
+    "rpc_allow_save_states"
+    "rpc_allow_screenshots"
     "rpc_allow_pica_snapshot"
     "rpc_allow_pica_breakpoints"
     "rpc_allow_pica_command_list"

@@ -80,9 +80,11 @@ System::System() : movie{*this}, cheat_engine{*this} {}
 System::~System() = default;
 
 #ifdef ENABLE_SCRIPTING
-void System::StartRPCServer(RPC::EmulationControlHandler emulation_control_handler) {
+void System::StartRPCServer(RPC::EmulationControlHandler emulation_control_handler,
+                            RPC::ClientCountHandler client_count_handler) {
     if (!rpc_server) {
-        rpc_server = std::make_unique<RPC::Server>(*this, std::move(emulation_control_handler));
+        rpc_server = std::make_unique<RPC::Server>(*this, std::move(emulation_control_handler),
+                                                   std::move(client_count_handler));
     }
 }
 

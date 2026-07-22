@@ -663,6 +663,8 @@ struct Values {
     Setting<bool> rpc_allow_emulation_control{true, Keys::rpc_allow_emulation_control};
     Setting<bool> rpc_allow_cpu_registers{true, Keys::rpc_allow_cpu_registers};
     Setting<bool> rpc_allow_graphics_debugger{true, Keys::rpc_allow_graphics_debugger};
+    Setting<bool> rpc_allow_save_states{true, Keys::rpc_allow_save_states};
+    Setting<bool> rpc_allow_screenshots{true, Keys::rpc_allow_screenshots};
     Setting<bool> rpc_allow_pica_snapshot{true, Keys::rpc_allow_pica_snapshot};
     Setting<bool> rpc_allow_pica_breakpoints{true, Keys::rpc_allow_pica_breakpoints};
     Setting<bool> rpc_allow_pica_command_list{true, Keys::rpc_allow_pica_command_list};

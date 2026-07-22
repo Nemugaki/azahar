@@ -2,13 +2,18 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
+#include <charconv>
+#include <QDir>
+#include <QFileInfo>
 #include <QLabel>
 #include <QStatusBar>
 #include <QThread>
 #include "citra_qt/bootmanager.h"
 #include "citra_qt/citra_qt.h"
 #include "citra_qt/rpc_controller.h"
+#include "citra_qt/uisettings.h"
 #include "core/core.h"
+#include "core/savestate.h"
 #include "core/rpc/udp_server.h"
 
 RPCController::RPCController(GMainWindow& main_window_, Core::System& system_)
@@ -16,13 +21,23 @@ RPCController::RPCController(GMainWindow& main_window_, Core::System& system_)
     indicator->setFrameStyle(QFrame::NoFrame);
     indicator->setContentsMargins(4, 0, 4, 0);
     indicator->setToolTip(
-        tr("Agent RPC on 127.0.0.1:%1 (loopback only)").arg(Core::RPC::GetRPCPort()));
+        tr("RPC server on 127.0.0.1:%1 (loopback only)").arg(Core::RPC::GetRPCPort()));
     main_window.statusBar()->addPermanentWidget(indicator);
     UpdateIndicator();
 
-    system.StartRPCServer([this](Core::RPC::EmulationControl operation, const std::string& path) {
-        return HandleEmulationControl(operation, path);
-    });
+    system.StartRPCServer(
+        [this](Core::RPC::EmulationControl operation, const std::string& path) {
+            return HandleEmulationControl(operation, path);
+        },
+        [this](u32 count) {
+            QMetaObject::invokeMethod(
+                this,
+                [this, count] {
+                    active_client_count = count;
+                    UpdateIndicator();
+                },
+                Qt::QueuedConnection);
+        });
 }
 
 RPCController::~RPCController() {
@@ -130,6 +145,46 @@ Core::RPC::EmulationControlReply RPCController::Execute(Core::RPC::EmulationCont
             main_window.emu_thread->SetRunning(true);
         }
         break;
+    case Core::RPC::EmulationControl::SaveState:
+    case Core::RPC::EmulationControl::LoadState: {
+        u32 slot{};
+        const auto [end, error] = std::from_chars(path.data(), path.data() + path.size(), slot);
+        if (State() == Core::RPC::EmulationState::Stopped) {
+            reply.result = Core::RPC::EmulationResult::InvalidState;
+        } else if (error != std::errc{} || end != path.data() + path.size() ||
+                   slot >= Core::SaveStateSlotCount) {
+            reply.result = Core::RPC::EmulationResult::InvalidArgument;
+        } else {
+            const auto signal = operation == Core::RPC::EmulationControl::SaveState
+                                    ? Core::System::Signal::Save
+                                    : Core::System::Signal::Load;
+            if (!system.SendSignal(signal, slot)) {
+                reply.result = Core::RPC::EmulationResult::Failed;
+            } else {
+                system.frame_limiter.AdvanceFrame();
+            }
+        }
+        break;
+    }
+    case Core::RPC::EmulationControl::Screenshot: {
+        const QFileInfo output{QString::fromStdString(path)};
+        if (State() != Core::RPC::EmulationState::Running) {
+            reply.result = Core::RPC::EmulationResult::InvalidState;
+        } else if (!output.isAbsolute() || output.fileName().isEmpty()) {
+            reply.result = Core::RPC::EmulationResult::InvalidArgument;
+        } else if (output.exists() || !QDir{}.mkpath(output.absolutePath())) {
+            reply.result = Core::RPC::EmulationResult::Failed;
+        } else {
+            main_window.OnPauseGame();
+            auto* const screenshot_window = main_window.secondary_window->HasFocus()
+                                                ? main_window.secondary_window
+                                                : main_window.render_window;
+            screenshot_window->CaptureScreenshot(
+                UISettings::values.screenshot_resolution_factor.GetValue(), output.filePath());
+            main_window.OnResumeGame(false);
+        }
+        break;
+    }
     default:
         reply.result = Core::RPC::EmulationResult::Unsupported;
         break;
@@ -163,9 +218,12 @@ void RPCController::DrainRequests() {
 }
 
 void RPCController::UpdateIndicator() {
-    indicator->setText(tr("RPC: listening"));
+    indicator->setText(tr("RPC: Listening at %1 | %2 active")
+                           .arg(Core::RPC::GetRPCPort())
+                           .arg(active_client_count));
     indicator->setToolTip(
-        tr("Agent RPC on 127.0.0.1:%1 (loopback only)\n%2 lifecycle requests handled")
+        tr("RPC server on 127.0.0.1:%1 (loopback only)\n%2 clients active in the last 10 seconds\n%3 frontend requests handled")
             .arg(Core::RPC::GetRPCPort())
+            .arg(active_client_count)
             .arg(request_count));
 }

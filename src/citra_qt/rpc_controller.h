@@ -50,4 +50,5 @@ private:
     std::deque<std::shared_ptr<Request>> requests;
     bool stopping{};
     u64 request_count{};
+    u32 active_client_count{};
 };

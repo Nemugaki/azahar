@@ -10,14 +10,15 @@
 
 namespace Core::RPC {
 
-Server::Server(Core::System& system_, Core::RPC::EmulationControlHandler emulation_control_handler)
+Server::Server(Core::System& system_, Core::RPC::EmulationControlHandler emulation_control_handler,
+               Core::RPC::ClientCountHandler client_count_handler)
     : rpc_server{system_, std::move(emulation_control_handler)} {
     const auto callback = [this](std::unique_ptr<Packet> new_request) {
         NewRequestCallback(std::move(new_request));
     };
 
     try {
-        udp_server = std::make_unique<UDPServer>(callback);
+        udp_server = std::make_unique<UDPServer>(callback, std::move(client_count_handler));
     } catch (...) {
         LOG_ERROR(RPC_Server, "Error starting UDP server");
     }

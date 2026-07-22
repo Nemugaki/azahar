@@ -167,6 +167,12 @@ u32 RPCServer::GetEnabledCapabilities() const {
     if (Settings::values.rpc_allow_graphics_debugger.GetValue()) {
         capabilities |= CAPABILITY_GX_COMMAND_TRACE;
     }
+    if (Settings::values.rpc_allow_save_states.GetValue()) {
+        capabilities |= CAPABILITY_SAVE_STATES;
+    }
+    if (Settings::values.rpc_allow_screenshots.GetValue()) {
+        capabilities |= CAPABILITY_SCREENSHOTS;
+    }
     if (Settings::values.pica_debugging.GetValue()) {
         if (Settings::values.rpc_allow_pica_snapshot.GetValue()) {
             capabilities |= CAPABILITY_PICA_SNAPSHOT;
@@ -195,7 +201,8 @@ bool RPCServer::IsPacketTypeEnabled(PacketType packet_type) const {
     case PacketType::SetGetProcess:
         return capabilities & CAPABILITY_MEMORY_ACCESS;
     case PacketType::EmulationControl:
-        return capabilities & CAPABILITY_EMULATION_CONTROL;
+        return capabilities &
+               (CAPABILITY_EMULATION_CONTROL | CAPABILITY_SAVE_STATES | CAPABILITY_SCREENSHOTS);
     case PacketType::CPURegisters:
         return capabilities & CAPABILITY_CPU_REGISTERS;
     case PacketType::GXCommandTrace:
@@ -210,6 +217,19 @@ bool RPCServer::IsPacketTypeEnabled(PacketType packet_type) const {
         return capabilities & CAPABILITY_PICA_SHADER;
     default:
         return false;
+    }
+}
+
+bool RPCServer::IsEmulationControlEnabled(EmulationControl operation) const {
+    const u32 capabilities = GetEnabledCapabilities();
+    switch (operation) {
+    case EmulationControl::SaveState:
+    case EmulationControl::LoadState:
+        return capabilities & CAPABILITY_SAVE_STATES;
+    case EmulationControl::Screenshot:
+        return capabilities & CAPABILITY_SCREENSHOTS;
+    default:
+        return capabilities & CAPABILITY_EMULATION_CONTROL;
     }
 }
 
@@ -616,10 +636,14 @@ void RPCServer::HandleSingleRequest(std::unique_ptr<Packet> request_packet) {
             success = true;
             break;
         case PacketType::EmulationControl: {
+            const auto operation = static_cast<EmulationControl>(arg1);
+            if (!IsEmulationControlEnabled(operation)) {
+                break;
+            }
             const auto path_size = request_packet->GetPacketDataSize() - sizeof(u32);
             const std::string path{reinterpret_cast<const char*>(packet_data.data() + sizeof(u32)),
                                    path_size};
-            HandleEmulationControl(*request_packet, static_cast<EmulationControl>(arg1), path);
+            HandleEmulationControl(*request_packet, operation, path);
             success = true;
             break;
         }

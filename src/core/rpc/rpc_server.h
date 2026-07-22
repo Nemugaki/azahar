@@ -49,6 +49,7 @@ private:
                           u32 count, u32 instruction_offset);
     u32 GetEnabledCapabilities() const;
     bool IsPacketTypeEnabled(PacketType packet_type) const;
+    bool IsEmulationControlEnabled(EmulationControl operation) const;
     bool ValidatePacket(const PacketHeader& packet_header);
     void HandleSingleRequest(std::unique_ptr<Packet> request);
     void HandleRequestsLoop(std::stop_token stop_token);

@@ -8,8 +8,8 @@ memory and has no authentication. Set `AZAHAR_RPC_PORT` before launching Azahar 
 default port, which is useful for isolated test instances; pass the same port to the client.
 
 The Debug settings page grants RPC access separately for memory/processes, emulation control, ARM
-registers, Graphics Debugger history, PICA snapshots, PICA breakpoints, PICA command lists, and the
-PICA vertex shader. Disabled features are omitted from the capability mask and their requests are
+registers, Graphics Debugger history, save states, screenshots, PICA snapshots, PICA breakpoints,
+PICA command lists, and the PICA vertex shader. Disabled features are omitted from the capability mask and their requests are
 rejected. PICA grants also require the base **Enable PICA200 debugging** setting; their saved
 checkboxes remain visible but disabled while that dependency is off.
 
@@ -28,6 +28,9 @@ c.restart()
 c.debug_pause()
 print(c.cpu_registers(0, 0, 16))
 c.debug_resume()
+c.save_state(1)
+c.load_state(1)
+c.screenshot("/absolute/new/output.png")
 snapshot = c.capture_pica_snapshot()
 c.set_pica_breakpoint(2)  # incoming primitive batch
 print(c.pica_breakpoints())
@@ -44,6 +47,8 @@ c.stop()
 
 Lifecycle calls return `(result, state)`. PICA capture arms a one-shot snapshot at the beginning of
 the next draw. It therefore works with hardware shaders enabled and does not halt emulation.
+Save-state slots range from 0 through 10. Screenshot requests require a running game and an
+absolute output path that does not already exist.
 
 ## PICA snapshot format
 

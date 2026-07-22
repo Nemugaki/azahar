@@ -2,8 +2,11 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
+#include <algorithm>
+#include <chrono>
 #include <cstdlib>
 #include <thread>
+#include <vector>
 #include <boost/asio.hpp>
 #include "common/common_types.h"
 #include "common/logging/log.h"
@@ -27,14 +30,17 @@ u16 GetRPCPort() {
 
 class UDPServer::Impl {
 public:
-    explicit Impl(std::function<void(std::unique_ptr<Packet>)> new_request_callback)
+    Impl(std::function<void(std::unique_ptr<Packet>)> new_request_callback,
+         ClientCountHandler client_count_handler_)
         // Use a random high port
         // TODO: Make configurable or increment port number on failure
         : socket(io_context, boost::asio::ip::udp::endpoint(boost::asio::ip::address_v4::loopback(),
                                                             GetRPCPort())),
-          new_request_callback(std::move(new_request_callback)) {
+          client_timer(io_context), new_request_callback(std::move(new_request_callback)),
+          client_count_handler(std::move(client_count_handler_)) {
 
         StartReceive();
+        StartClientTimer();
         worker_thread = std::thread([this] { io_context.run(); });
     }
 
@@ -64,6 +70,7 @@ private:
                 std::unique_ptr<Packet> new_packet =
                     std::make_unique<Packet>(header, data, send_reply_callback);
 
+                TouchClient(remote_endpoint);
                 // Send the request to the upper layer for handling
                 new_request_callback(std::move(new_packet));
             }
@@ -71,6 +78,45 @@ private:
             LOG_WARNING(RPC_Server, "Received message with wrong size: {}", size);
         }
         StartReceive();
+    }
+
+    void TouchClient(const boost::asio::ip::udp::endpoint& endpoint) {
+        const auto now = std::chrono::steady_clock::now();
+        PruneClients(now);
+        const auto client = std::ranges::find_if(
+            clients, [&endpoint](const auto& entry) { return entry.endpoint == endpoint; });
+        if (client == clients.end()) {
+            clients.push_back({endpoint, now});
+            NotifyClientCount();
+        } else {
+            client->last_seen = now;
+        }
+    }
+
+    void StartClientTimer() {
+        client_timer.expires_after(std::chrono::seconds(1));
+        client_timer.async_wait([this](const boost::system::error_code& error) {
+            if (!error) {
+                PruneClients(std::chrono::steady_clock::now());
+                StartClientTimer();
+            }
+        });
+    }
+
+    void PruneClients(std::chrono::steady_clock::time_point now) {
+        const auto old_size = clients.size();
+        std::erase_if(clients, [now](const auto& client) {
+            return now - client.last_seen >= std::chrono::seconds(10);
+        });
+        if (clients.size() != old_size) {
+            NotifyClientCount();
+        }
+    }
+
+    void NotifyClientCount() {
+        if (client_count_handler) {
+            client_count_handler(static_cast<u32>(clients.size()));
+        }
     }
 
     void SendReply(boost::asio::ip::udp::endpoint endpoint, Packet& reply_packet) {
@@ -97,14 +143,23 @@ private:
 
     boost::asio::io_context io_context;
     boost::asio::ip::udp::socket socket;
+    boost::asio::steady_timer client_timer;
     std::array<u8, MAX_PACKET_SIZE> request_buffer;
     boost::asio::ip::udp::endpoint remote_endpoint;
 
     std::function<void(std::unique_ptr<Packet>)> new_request_callback;
+    ClientCountHandler client_count_handler;
+    struct Client {
+        boost::asio::ip::udp::endpoint endpoint;
+        std::chrono::steady_clock::time_point last_seen;
+    };
+    std::vector<Client> clients;
 };
 
-UDPServer::UDPServer(std::function<void(std::unique_ptr<Packet>)> new_request_callback)
-    : impl(std::make_unique<Impl>(new_request_callback)) {}
+UDPServer::UDPServer(std::function<void(std::unique_ptr<Packet>)> new_request_callback,
+                     ClientCountHandler client_count_handler)
+    : impl(std::make_unique<Impl>(std::move(new_request_callback),
+                                  std::move(client_count_handler))) {}
 
 UDPServer::~UDPServer() = default;
 

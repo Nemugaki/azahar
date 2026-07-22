@@ -143,6 +143,8 @@ void ConfigureDebug::SetConfiguration() {
     ui->rpc_allow_cpu_registers->setChecked(Settings::values.rpc_allow_cpu_registers.GetValue());
     ui->rpc_allow_graphics_debugger->setChecked(
         Settings::values.rpc_allow_graphics_debugger.GetValue());
+    ui->rpc_allow_save_states->setChecked(Settings::values.rpc_allow_save_states.GetValue());
+    ui->rpc_allow_screenshots->setChecked(Settings::values.rpc_allow_screenshots.GetValue());
     ui->rpc_allow_pica_snapshot->setChecked(Settings::values.rpc_allow_pica_snapshot.GetValue());
     ui->rpc_allow_pica_breakpoints->setChecked(
         Settings::values.rpc_allow_pica_breakpoints.GetValue());
@@ -206,6 +208,8 @@ void ConfigureDebug::ApplyConfiguration() {
     Settings::values.rpc_allow_emulation_control = ui->rpc_allow_emulation_control->isChecked();
     Settings::values.rpc_allow_cpu_registers = ui->rpc_allow_cpu_registers->isChecked();
     Settings::values.rpc_allow_graphics_debugger = ui->rpc_allow_graphics_debugger->isChecked();
+    Settings::values.rpc_allow_save_states = ui->rpc_allow_save_states->isChecked();
+    Settings::values.rpc_allow_screenshots = ui->rpc_allow_screenshots->isChecked();
     Settings::values.rpc_allow_pica_snapshot = ui->rpc_allow_pica_snapshot->isChecked();
     Settings::values.rpc_allow_pica_breakpoints = ui->rpc_allow_pica_breakpoints->isChecked();
     Settings::values.rpc_allow_pica_command_list = ui->rpc_allow_pica_command_list->isChecked();
@@ -251,6 +255,8 @@ void ConfigureDebug::UpdateRPCControls() {
     ui->rpc_allow_emulation_control->setEnabled(enabled);
     ui->rpc_allow_cpu_registers->setEnabled(enabled);
     ui->rpc_allow_graphics_debugger->setEnabled(enabled);
+    ui->rpc_allow_save_states->setEnabled(enabled);
+    ui->rpc_allow_screenshots->setEnabled(enabled);
     const bool pica_enabled = enabled && ui->toggle_pica_debugging->isChecked();
     ui->rpc_allow_pica_snapshot->setEnabled(pica_enabled);
     ui->rpc_allow_pica_breakpoints->setEnabled(pica_enabled);

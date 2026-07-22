@@ -37,6 +37,9 @@ enum class EmulationControl : u32 {
     Restart = 5,
     DebugPause = 6,
     DebugResume = 7,
+    SaveState = 8,
+    LoadState = 9,
+    Screenshot = 10,
 };
 
 enum class EmulationState : u32 {
@@ -130,6 +133,7 @@ struct EmulationControlReply {
 
 using EmulationControlHandler =
     std::function<EmulationControlReply(EmulationControl, const std::string&)>;
+using ClientCountHandler = std::function<void(u32)>;
 
 struct PacketHeader {
     u32 version;
@@ -161,6 +165,8 @@ constexpr u32 CAPABILITY_CPU_REGISTERS = 1U << 4;
 constexpr u32 CAPABILITY_GX_COMMAND_TRACE = 1U << 5;
 constexpr u32 CAPABILITY_PICA_SHADER = 1U << 6;
 constexpr u32 CAPABILITY_MEMORY_ACCESS = 1U << 7;
+constexpr u32 CAPABILITY_SAVE_STATES = 1U << 8;
+constexpr u32 CAPABILITY_SCREENSHOTS = 1U << 9;
 
 class Packet {
 public:
