@@ -6,6 +6,7 @@ import struct
 import random
 import enum
 import socket
+import time
 
 CURRENT_REQUEST_VERSION = 1
 MAX_REQUEST_DATA_SIZE = 1024
@@ -16,13 +17,33 @@ class RequestType(enum.IntEnum):
     WriteMemory = 2,
     ProcessList = 3,
     SetGetProcess = 4,
+    Capabilities = 5,
+    EmulationControl = 6,
+    PicaSnapshot = 7,
+    PicaBreakpoint = 8,
+    PicaTrace = 9,
+
+class EmulationControl(enum.IntEnum):
+    Status = 0
+    Run = 1
+    Pause = 2
+    Resume = 3
+    Stop = 4
+    Restart = 5
+
+class EmulationState(enum.IntEnum):
+    Stopped = 0
+    Running = 1
+    Paused = 2
 
 CITRA_PORT = 45987
 
 class Citra:
-    def __init__(self, address="127.0.0.1", port=CITRA_PORT):
+    def __init__(self, address="127.0.0.1", port=CITRA_PORT, timeout=2.0):
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.address = address
+        self.port = port
+        self.socket.settimeout(timeout)
 
     def is_connected(self):
         return self.socket is not None
@@ -40,6 +61,114 @@ class Citra:
             return raw_reply[4*4:]
         return None
 
+    def _request(self, request_type, data=b""):
+        request, request_id = self._generate_header(request_type, len(data))
+        self.socket.sendto(request + data, (self.address, self.port))
+        raw_reply = self.socket.recv(MAX_PACKET_SIZE)
+        return self._read_and_validate_header(raw_reply, request_id, request_type)
+
+    def capabilities(self):
+        data = self._request(RequestType.Capabilities)
+        if data is None or len(data) != 8:
+            return None
+        return struct.unpack("II", data)
+
+    def emulation_control(self, operation, path=""):
+        data = struct.pack("I", operation) + path.encode("utf-8")
+        reply = self._request(RequestType.EmulationControl, data)
+        if reply is None or len(reply) != 8:
+            return None
+        result, state = struct.unpack("II", reply)
+        return result, EmulationState(state)
+
+    def status(self):
+        return self.emulation_control(EmulationControl.Status)
+
+    def run(self, path):
+        return self.emulation_control(EmulationControl.Run, path)
+
+    def pause(self):
+        return self.emulation_control(EmulationControl.Pause)
+
+    def resume(self):
+        return self.emulation_control(EmulationControl.Resume)
+
+    def stop(self):
+        return self.emulation_control(EmulationControl.Stop)
+
+    def restart(self):
+        return self.emulation_control(EmulationControl.Restart)
+
+    def pica_snapshot_status(self):
+        reply = self._request(RequestType.PicaSnapshot, struct.pack("I", 1))
+        if reply is None or len(reply) != 8:
+            return None
+        return struct.unpack("II", reply)
+
+    def capture_pica_snapshot(self, timeout=2.0):
+        reply = self._request(RequestType.PicaSnapshot, struct.pack("I", 0))
+        if reply is None or len(reply) != 8:
+            return None
+        previous_generation, _ = struct.unpack("II", reply)
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            status = self.pica_snapshot_status()
+            if status and status[0] != previous_generation:
+                generation, total_size = status
+                result = bytearray()
+                while len(result) < total_size:
+                    size = min(MAX_REQUEST_DATA_SIZE, total_size - len(result))
+                    request = struct.pack("IIII", 2, generation, len(result), size)
+                    chunk = self._request(RequestType.PicaSnapshot, request)
+                    if not chunk:
+                        return None
+                    result.extend(chunk)
+                return bytes(result)
+            time.sleep(0.01)
+        return None
+
+    def pica_breakpoints(self):
+        reply = self._request(RequestType.PicaBreakpoint, struct.pack("I", 0))
+        if reply is None or len(reply) != 12:
+            return None
+        return struct.unpack("III", reply)
+
+    def set_pica_breakpoint(self, event, enabled=True):
+        reply = self._request(RequestType.PicaBreakpoint,
+                              struct.pack("III", 1, event, enabled))
+        return struct.unpack("III", reply) if reply and len(reply) == 12 else None
+
+    def resume_pica_breakpoint(self):
+        reply = self._request(RequestType.PicaBreakpoint, struct.pack("I", 2))
+        return struct.unpack("III", reply) if reply and len(reply) == 12 else None
+
+    def clear_pica_breakpoints(self):
+        reply = self._request(RequestType.PicaBreakpoint, struct.pack("I", 3))
+        return struct.unpack("III", reply) if reply and len(reply) == 12 else None
+
+    def pica_trace_status(self):
+        reply = self._request(RequestType.PicaTrace, struct.pack("I", 0))
+        return struct.unpack("III", reply) if reply and len(reply) == 12 else None
+
+    def start_pica_trace(self):
+        reply = self._request(RequestType.PicaTrace, struct.pack("I", 1))
+        return struct.unpack("III", reply) if reply and len(reply) == 12 else None
+
+    def finish_pica_trace(self):
+        reply = self._request(RequestType.PicaTrace, struct.pack("I", 2))
+        if reply is None or len(reply) != 12:
+            return None
+        _, generation, total_size = struct.unpack("III", reply)
+        result = bytearray()
+        while len(result) < total_size:
+            size = min(MAX_REQUEST_DATA_SIZE, total_size - len(result))
+            request = struct.pack("IIII", 3, generation, len(result), size)
+            chunk = self._request(RequestType.PicaTrace, request)
+            if not chunk:
+                return None
+            result.extend(chunk)
+        return bytes(result)
+
     def process_list(self):
         processes = {}
         read_processes = 0
@@ -47,7 +176,7 @@ class Citra:
             request_data = struct.pack("II", read_processes, 0x7FFFFFFF)
             request, request_id = self._generate_header(RequestType.ProcessList, len(request_data))
             request += request_data
-            self.socket.sendto(request, (self.address, CITRA_PORT))
+            self.socket.sendto(request, (self.address, self.port))
 
             raw_reply = self.socket.recv(MAX_PACKET_SIZE)
             reply_data = self._read_and_validate_header(raw_reply, request_id, RequestType.ProcessList)
@@ -71,7 +200,7 @@ class Citra:
         request_data = struct.pack("II", 0, 0)
         request, request_id = self._generate_header(RequestType.SetGetProcess, len(request_data))
         request += request_data
-        self.socket.sendto(request, (self.address, CITRA_PORT))
+        self.socket.sendto(request, (self.address, self.port))
 
         raw_reply = self.socket.recv(MAX_PACKET_SIZE)
         reply_data = self._read_and_validate_header(raw_reply, request_id, RequestType.SetGetProcess)
@@ -85,7 +214,7 @@ class Citra:
         request_data = struct.pack("II", 1, process_id)
         request, request_id = self._generate_header(RequestType.SetGetProcess, len(request_data))
         request += request_data
-        self.socket.sendto(request, (self.address, CITRA_PORT))
+        self.socket.sendto(request, (self.address, self.port))
 
         self.socket.recv(MAX_PACKET_SIZE)
 
@@ -100,7 +229,7 @@ class Citra:
             request_data = struct.pack("II", read_address, temp_read_size)
             request, request_id = self._generate_header(RequestType.ReadMemory, len(request_data))
             request += request_data
-            self.socket.sendto(request, (self.address, CITRA_PORT))
+            self.socket.sendto(request, (self.address, self.port))
 
             raw_reply = self.socket.recv(MAX_PACKET_SIZE)
             reply_data = self._read_and_validate_header(raw_reply, request_id, RequestType.ReadMemory)
@@ -132,7 +261,7 @@ class Citra:
             request_data += write_contents[:temp_write_size]
             request, request_id = self._generate_header(RequestType.WriteMemory, len(request_data))
             request += request_data
-            self.socket.sendto(request, (self.address, CITRA_PORT))
+            self.socket.sendto(request, (self.address, self.port))
 
             raw_reply = self.socket.recv(MAX_PACKET_SIZE)
             reply_data = self._read_and_validate_header(raw_reply, request_id, RequestType.WriteMemory)

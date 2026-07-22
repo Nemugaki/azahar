@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <array>
+#include <atomic>
 #include <condition_variable>
 #include <iterator>
 #include <list>
@@ -63,14 +65,17 @@ public:
         virtual ~BreakPointObserver() {
             auto context = context_weak.lock();
             if (context) {
-                std::unique_lock lock(context->breakpoint_mutex);
-                context->breakpoint_observers.remove(this);
+                bool last_observer;
+                {
+                    std::unique_lock lock(context->breakpoint_mutex);
+                    context->breakpoint_observers.remove(this);
+                    last_observer = context->breakpoint_observers.empty();
+                }
 
-                // If we are the last observer to be destroyed, tell the debugger context that
-                // it is free to continue. In particular, this is required for a proper Citra
-                // shutdown, when the emulation thread is waiting at a breakpoint.
-                if (context->breakpoint_observers.empty())
+                // Resume after releasing breakpoint_mutex: Resume locks the same mutex.
+                if (last_observer) {
                     context->Resume();
+                }
             }
         }
 
@@ -100,7 +105,13 @@ public:
      * Simple structure defining a breakpoint state
      */
     struct BreakPoint {
-        bool enabled = false;
+        std::atomic_bool enabled = false;
+    };
+
+    struct BreakPointState {
+        u32 enabled_mask;
+        Event active;
+        bool at_breakpoint;
     };
 
     /**
@@ -136,6 +147,12 @@ public:
      */
     void Resume();
 
+    void SetBreakpoint(Event event, bool enabled) {
+        breakpoints[static_cast<int>(event)].enabled = enabled;
+    }
+
+    BreakPointState GetBreakpointState();
+
     /**
      * Delete all set breakpoints and resume emulation.
      */
@@ -148,7 +165,7 @@ public:
 
     // TODO: Evaluate if access to these members should be hidden behind a public interface.
     std::array<BreakPoint, (int)Event::NumEvents> breakpoints;
-    Event active_breakpoint;
+    Event active_breakpoint = Event::FirstEvent;
     bool at_breakpoint = false;
 
     std::shared_ptr<CiTrace::Recorder> recorder = nullptr;
@@ -187,7 +204,7 @@ struct PicaTrace {
     std::vector<Write> writes;
 };
 
-extern bool g_is_pica_tracing;
+extern std::atomic_bool g_is_pica_tracing;
 
 void StartPicaTracing();
 inline bool IsPicaTracing() {

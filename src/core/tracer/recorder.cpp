@@ -14,7 +14,7 @@ Recorder::Recorder(const InitialState& initial_state) : initial_state(initial_st
 
 void Recorder::Finish(const std::string& filename) {
     // Setup CiTrace header
-    CTHeader header;
+    CTHeader header{};
     std::memcpy(header.magic, CTHeader::ExpectedMagicWord(), 4);
     header.version = CTHeader::ExpectedVersion();
     header.header_size = sizeof(CTHeader);
@@ -22,8 +22,9 @@ void Recorder::Finish(const std::string& filename) {
     // Calculate file offsets
     auto& initial = header.initial_state_offsets;
 
-    initial.pica_registers_size = static_cast<u32>(initial_state.pica_registers.size());
+    initial.gpu_registers_size = 0;
     initial.lcd_registers_size = static_cast<u32>(initial_state.lcd_registers.size());
+    initial.pica_registers_size = static_cast<u32>(initial_state.pica_registers.size());
     initial.default_attributes_size = static_cast<u32>(initial_state.default_attributes.size());
     initial.vs_program_binary_size = static_cast<u32>(initial_state.vs_program_binary.size());
     initial.vs_swizzle_data_size = static_cast<u32>(initial_state.vs_swizzle_data.size());
@@ -36,7 +37,6 @@ void Recorder::Finish(const std::string& filename) {
     initial.gpu_registers = sizeof(header);
     initial.lcd_registers = initial.gpu_registers + initial.gpu_registers_size * sizeof(u32);
     initial.pica_registers = initial.lcd_registers + initial.lcd_registers_size * sizeof(u32);
-    ;
     initial.default_attributes = initial.pica_registers + initial.pica_registers_size * sizeof(u32);
     initial.vs_program_binary =
         initial.default_attributes + initial.default_attributes_size * sizeof(u32);
@@ -80,16 +80,16 @@ void Recorder::Finish(const std::string& filename) {
             throw "Failed to write header";
 
         // Write initial state
+        written =
+            file.WriteArray(initial_state.lcd_registers.data(), initial_state.lcd_registers.size());
+        if (written != initial_state.lcd_registers.size() || file.Tell() != initial.pica_registers)
+            throw "Failed to write LCD registers";
+
         written = file.WriteArray(initial_state.pica_registers.data(),
                                   initial_state.pica_registers.size());
         if (written != initial_state.pica_registers.size() ||
             file.Tell() != initial.default_attributes)
             throw "Failed to write Pica registers";
-
-        written =
-            file.WriteArray(initial_state.lcd_registers.data(), initial_state.lcd_registers.size());
-        if (written != initial_state.lcd_registers.size() || file.Tell() != initial.pica_registers)
-            throw "Failed to write LCD registers";
 
         written = file.WriteArray(initial_state.default_attributes.data(),
                                   initial_state.default_attributes.size());

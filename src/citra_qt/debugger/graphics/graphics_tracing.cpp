@@ -68,17 +68,17 @@ void GraphicsTracingWidget::StartRecording() {
 
     // Encode floating point numbers to 24-bit values
     // TODO: Drop this explicit conversion once we store float24 values bit-correctly internally.
-    std::array<u32, 4 * 16> default_attributes;
+    std::array<u32, 4 * 16> default_attributes{};
     for (u32 i = 0; i < 16; ++i) {
-        for (u32 comp = 0; comp < 3; ++comp) {
+        for (u32 comp = 0; comp < 4; ++comp) {
             default_attributes[4 * i + comp] =
                 nihstro::to_float24(pica.input_default_attributes[i][comp].ToFloat32());
         }
     }
 
-    std::array<u32, 4 * 96> vs_float_uniforms;
+    std::array<u32, 4 * 96> vs_float_uniforms{};
     for (u32 i = 0; i < 96; ++i) {
-        for (u32 comp = 0; comp < 3; ++comp) {
+        for (u32 comp = 0; comp < 4; ++comp) {
             vs_float_uniforms[4 * i + comp] =
                 nihstro::to_float24(pica.vs_setup.uniforms.f[i][comp].ToFloat32());
         }
@@ -87,15 +87,17 @@ void GraphicsTracingWidget::StartRecording() {
     CiTrace::Recorder::InitialState state;
 
     const auto copy = [&](std::vector<u32>& dest, const auto& data) {
-        dest.resize(sizeof(data));
+        dest.resize(sizeof(data) / sizeof(dest.front()));
         std::memcpy(dest.data(), std::addressof(data), sizeof(data));
     };
 
     copy(state.pica_registers, pica.regs);
     copy(state.lcd_registers, pica.regs_lcd);
     copy(state.default_attributes, default_attributes);
-    copy(state.vs_program_binary, shader_binary);
-    copy(state.vs_swizzle_data, swizzle_data);
+    state.vs_program_binary.assign(shader_binary.begin(),
+                                   shader_binary.begin() + pica.vs_setup.GetBiggestProgramSize());
+    state.vs_swizzle_data.assign(swizzle_data.begin(),
+                                 swizzle_data.begin() + pica.vs_setup.GetBiggestSwizzleSize());
     copy(state.vs_float_uniforms, vs_float_uniforms);
     // copy(TODO: Not implemented, std::back_inserter(state.gs_program_binary));
     // copy(TODO: Not implemented, std::back_inserter(state.gs_swizzle_data));

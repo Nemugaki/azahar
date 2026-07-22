@@ -64,6 +64,15 @@ void DebugContext::Resume() {
     resume_from_breakpoint.notify_one();
 }
 
+DebugContext::BreakPointState DebugContext::GetBreakpointState() {
+    std::lock_guard lock{breakpoint_mutex};
+    u32 enabled_mask = 0;
+    for (u32 i = 0; i < breakpoints.size(); ++i) {
+        enabled_mask |= static_cast<u32>(breakpoints[i].enabled) << i;
+    }
+    return {enabled_mask, active_breakpoint, at_breakpoint};
+}
+
 std::shared_ptr<DebugContext> g_debug_context; // TODO: Get rid of this global
 
 namespace DebugUtils {
@@ -183,18 +192,18 @@ void DumpShader(const std::string& filename, const ShaderRegs& config, const Sha
     u32 dvlp_offset = QueueForWriting(reinterpret_cast<const u8*>(&dvlp), sizeof(dvlp));
     dvlb.dvle_offset = QueueForWriting(reinterpret_cast<const u8*>(&dvle), sizeof(dvle));
 
-    // TODO: Reduce the amount of binary code written to relevant portions
     const auto& program_code = setup.GetProgramCode();
+    const u32 program_size = setup.GetBiggestProgramSize();
     dvlp.binary_offset = write_offset - dvlp_offset;
-    dvlp.binary_size_words = static_cast<uint32_t>(program_code.size());
-    QueueForWriting(reinterpret_cast<const u8*>(program_code.data()),
-                    static_cast<u32>(program_code.size()) * sizeof(u32));
+    dvlp.binary_size_words = program_size;
+    QueueForWriting(reinterpret_cast<const u8*>(program_code.data()), program_size * sizeof(u32));
 
     const auto& swizzle_data = setup.GetSwizzleData();
+    const u32 swizzle_size = setup.GetBiggestSwizzleSize();
     dvlp.swizzle_info_offset = write_offset - dvlp_offset;
-    dvlp.swizzle_info_num_entries = static_cast<uint32_t>(swizzle_data.size());
+    dvlp.swizzle_info_num_entries = swizzle_size;
     u32 dummy = 0;
-    for (unsigned int i = 0; i < swizzle_data.size(); ++i) {
+    for (u32 i = 0; i < swizzle_size; ++i) {
         QueueForWriting(reinterpret_cast<const u8*>(&swizzle_data[i]), sizeof(swizzle_data[i]));
         QueueForWriting(reinterpret_cast<const u8*>(&dummy), sizeof(dummy));
     }
@@ -258,18 +267,16 @@ void DumpShader(const std::string& filename, const ShaderRegs& config, const Sha
 
 static std::unique_ptr<PicaTrace> pica_trace;
 static std::mutex pica_trace_mutex;
-bool g_is_pica_tracing = false;
+std::atomic_bool g_is_pica_tracing = false;
 
 void StartPicaTracing() {
-    if (g_is_pica_tracing) {
+    std::lock_guard lock(pica_trace_mutex);
+    if (g_is_pica_tracing.exchange(true)) {
         LOG_WARNING(HW_GPU, "StartPicaTracing called even though tracing already running!");
         return;
     }
 
-    std::lock_guard lock(pica_trace_mutex);
     pica_trace = std::make_unique<PicaTrace>();
-
-    g_is_pica_tracing = true;
 }
 
 void OnPicaRegWrite(u16 cmd_id, u16 mask, u32 value) {
@@ -277,18 +284,16 @@ void OnPicaRegWrite(u16 cmd_id, u16 mask, u32 value) {
         return;
 
     std::lock_guard lock(pica_trace_mutex);
-
-    pica_trace->writes.push_back(PicaTrace::Write{cmd_id, mask, value});
+    if (pica_trace) {
+        pica_trace->writes.push_back(PicaTrace::Write{cmd_id, mask, value});
+    }
 }
 
 std::unique_ptr<PicaTrace> FinishPicaTracing() {
-    if (!g_is_pica_tracing) {
+    if (!g_is_pica_tracing.exchange(false)) {
         LOG_WARNING(HW_GPU, "FinishPicaTracing called even though tracing isn't running!");
         return {};
     }
-
-    // signalize that no further tracing should be performed
-    g_is_pica_tracing = false;
 
     // Wait until running tracing is finished
     std::lock_guard lock(pica_trace_mutex);

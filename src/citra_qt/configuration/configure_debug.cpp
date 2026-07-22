@@ -134,6 +134,7 @@ void ConfigureDebug::SetConfiguration() {
     ui->enable_rpc_server->setChecked(Settings::values.enable_rpc_server.GetValue());
 #ifndef ENABLE_SCRIPTING
     ui->enable_rpc_server->setVisible(false);
+    ui->rpc_server_info->setVisible(false);
 #endif // !ENABLE_SCRIPTING
     ui->toggle_unique_data_console_type->setChecked(
         Settings::values.toggle_unique_data_console_type.GetValue());
@@ -212,6 +213,7 @@ void ConfigureDebug::SetupPerGameUI() {
     ui->gdb_groupbox->setVisible(false);
     ui->groupBox_2->setVisible(false);
     ui->enable_rpc_server->setVisible(false);
+    ui->rpc_server_info->setVisible(false);
     ui->toggle_unique_data_console_type->setVisible(false);
     ui->break_on_unmapped_memory_access->setVisible(false);
     ui->toggle_cpu_jit->setVisible(false);

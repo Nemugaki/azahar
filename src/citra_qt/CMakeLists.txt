@@ -203,6 +203,13 @@ add_library(citra_qt STATIC EXCLUDE_FROM_ALL
     util/util.h
 )
 
+if (ENABLE_SCRIPTING)
+    target_sources(citra_qt PRIVATE
+        rpc_controller.cpp
+        rpc_controller.h
+    )
+endif()
+
 target_include_directories(citra_qt PUBLIC ${CMAKE_BINARY_DIR}/src)
 
 if (APPLE)

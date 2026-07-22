@@ -6,10 +6,13 @@
 
 #include <functional>
 #include <memory>
+#include "common/common_types.h"
 
 namespace Core::RPC {
 
 class Packet;
+
+u16 GetRPCPort();
 
 class UDPServer {
 public:

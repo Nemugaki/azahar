@@ -83,7 +83,7 @@ bool BreakPointModel::setData(const QModelIndex& index, const QVariant& value, i
         if (!context)
             return false;
 
-        context->breakpoints[(int)event].enabled = value == Qt::Checked;
+        context->SetBreakpoint(event, value == Qt::Checked);
         QModelIndex changed_index = createIndex(index.row(), 0);
         emit dataChanged(changed_index, changed_index);
         return true;

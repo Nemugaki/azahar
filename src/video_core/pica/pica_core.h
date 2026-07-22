@@ -4,6 +4,11 @@
 
 #pragma once
 
+#include <atomic>
+#include <mutex>
+#include <span>
+#include <vector>
+
 #include "common/common_types.h"
 #include "core/hle/service/gsp/gsp_interrupt.h"
 #include "video_core/pica/dirty_regs.h"
@@ -120,6 +125,17 @@ public:
 
     void ProcessCmdList(PAddr list, u32 size, bool ignore_list);
 
+    struct SnapshotInfo {
+        u32 generation;
+        u32 size;
+    };
+
+    /// Capture PICA state immediately before the next draw, including hardware-accelerated draws.
+    void RequestSnapshot();
+    SnapshotInfo GetSnapshotInfo() const;
+    u32 ReadSnapshot(u32 generation, u32 offset, std::span<u8> output) const;
+    void ClearSnapshot();
+
 private:
     void InitializeRegs();
 
@@ -132,6 +148,8 @@ private:
     void DrawArrays(bool is_indexed);
 
     void LoadVertices(bool is_indexed);
+
+    void CaptureSnapshot();
 
 public:
     union Regs {
@@ -401,6 +419,11 @@ private:
     PrimitiveAssembler primitive_assembler;
     CommandList cmd_list;
     std::unique_ptr<ShaderEngine> shader_engine;
+
+    std::atomic_bool snapshot_requested{};
+    mutable std::mutex snapshot_mutex;
+    std::vector<u8> snapshot;
+    u32 snapshot_generation{};
 };
 
 #define GPU_REG_INDEX(field_name) (offsetof(Pica::PicaCore::Regs, field_name) / sizeof(u32))

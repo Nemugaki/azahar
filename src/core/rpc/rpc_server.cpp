@@ -8,19 +8,31 @@
 #include "core/memory.h"
 #include "core/rpc/packet.h"
 #include "core/rpc/rpc_server.h"
+#include "video_core/debug_utils/debug_utils.h"
+#include "video_core/gpu.h"
+#include "video_core/pica/pica_core.h"
 
 namespace Core::RPC {
 
-RPCServer::RPCServer(Core::System& system_) : system{system_} {
+RPCServer::RPCServer(Core::System& system_, EmulationControlHandler emulation_control_handler_)
+    : system{system_}, emulation_control_handler{std::move(emulation_control_handler_)} {
     LOG_INFO(RPC_Server, "Starting RPC server.");
     request_handler_thread =
         std::jthread([this](std::stop_token stop_token) { HandleRequestsLoop(stop_token); });
 }
 
-RPCServer::~RPCServer() = default;
+RPCServer::~RPCServer() {
+    request_handler_thread.request_stop();
+    request_handler_thread.join();
+    if (pica_trace_owned && Pica::DebugUtils::IsPicaTracing()) {
+        Pica::DebugUtils::FinishPicaTracing();
+    }
+}
 
 void RPCServer::HandleReadMemory(Packet& packet, u32 address, u32 data_size) {
-    if (data_size > MAX_READ_SIZE) {
+    if (!system.IsPoweredOn() || data_size > MAX_READ_SIZE) {
+        packet.SetPacketDataSize(0);
+        packet.SendReply();
         return;
     }
     u32 read_size = data_size;
@@ -44,6 +56,12 @@ void RPCServer::HandleReadMemory(Packet& packet, u32 address, u32 data_size) {
 }
 
 void RPCServer::HandleWriteMemory(Packet& packet, u32 address, std::span<const u8> data) {
+    if (!system.IsPoweredOn()) {
+        packet.SetPacketDataSize(0);
+        packet.SendReply();
+        return;
+    }
+
     // Only allow writing to certain memory regions
     if ((address >= Memory::PROCESS_IMAGE_VADDR && address <= Memory::PROCESS_IMAGE_VADDR_END) ||
         (address >= Memory::HEAP_VADDR && address <= Memory::HEAP_VADDR_END) ||
@@ -72,6 +90,12 @@ void RPCServer::HandleWriteMemory(Packet& packet, u32 address, std::span<const u
 }
 
 void RPCServer::HandleProcessList(Packet& packet, u32 start_index, u32 max_amount) {
+    if (!system.IsPoweredOn()) {
+        packet.SetPacketDataSize(0);
+        packet.SendReply();
+        return;
+    }
+
     const auto process_list = system.Kernel().GetProcessList();
     const u32 start = std::min(start_index, static_cast<u32>(process_list.size()));
     const u32 end = std::min(start + max_amount, static_cast<u32>(process_list.size()));
@@ -115,6 +139,126 @@ void RPCServer::HandleSetGetProcess(Packet& packet, u32 operation, u32 process_i
     packet.SendReply();
 }
 
+void RPCServer::HandleCapabilities(Packet& packet) {
+    const std::array response{CURRENT_VERSION,
+                              CAPABILITY_EMULATION_CONTROL | CAPABILITY_PICA_SNAPSHOT |
+                                  CAPABILITY_PICA_BREAKPOINT | CAPABILITY_PICA_TRACE};
+    std::memcpy(packet.GetPacketData().data(), response.data(), sizeof(response));
+    packet.SetPacketDataSize(sizeof(response));
+    packet.SendReply();
+}
+
+void RPCServer::HandlePicaBreakpoint(Packet& packet, PicaBreakpointOperation operation, u32 event,
+                                     u32 enabled) {
+    const auto context = Pica::g_debug_context;
+    if (!context) {
+        packet.SetPacketDataSize(0);
+        packet.SendReply();
+        return;
+    }
+    if (operation == PicaBreakpointOperation::Set &&
+        event < static_cast<u32>(Pica::DebugContext::Event::NumEvents)) {
+        context->SetBreakpoint(static_cast<Pica::DebugContext::Event>(event), enabled != 0);
+    } else if (operation == PicaBreakpointOperation::Resume) {
+        context->Resume();
+    } else if (operation == PicaBreakpointOperation::Clear) {
+        context->ClearBreakpoints();
+    }
+    const auto state = context->GetBreakpointState();
+    const PicaBreakpointReply reply{state.enabled_mask, static_cast<u32>(state.active),
+                                    state.at_breakpoint};
+    std::memcpy(packet.GetPacketData().data(), &reply, sizeof(reply));
+    packet.SetPacketDataSize(sizeof(reply));
+    packet.SendReply();
+}
+
+void RPCServer::HandlePicaTrace(Packet& packet, PicaTraceOperation operation, u32 generation,
+                                u32 offset, u32 size) {
+    if (operation == PicaTraceOperation::Start) {
+        if (!Pica::DebugUtils::IsPicaTracing()) {
+            Pica::DebugUtils::StartPicaTracing();
+            pica_trace_owned = true;
+        }
+    } else if (operation == PicaTraceOperation::Stop) {
+        if (pica_trace_owned && Pica::DebugUtils::IsPicaTracing()) {
+            if (auto trace = Pica::DebugUtils::FinishPicaTracing()) {
+                pica_trace_data.resize(trace->writes.size() *
+                                       sizeof(Pica::DebugUtils::PicaTrace::Write));
+                if (!pica_trace_data.empty()) {
+                    std::memcpy(pica_trace_data.data(), trace->writes.data(),
+                                pica_trace_data.size());
+                }
+                ++pica_trace_generation;
+            }
+            pica_trace_owned = false;
+        }
+    } else if (operation == PicaTraceOperation::Read) {
+        if (generation == pica_trace_generation && offset <= pica_trace_data.size()) {
+            const auto available = static_cast<u32>(pica_trace_data.size() - offset);
+            const auto read_size = std::min(size, available);
+            std::memcpy(packet.GetPacketData().data(), pica_trace_data.data() + offset, read_size);
+            packet.SetPacketDataSize(read_size);
+        } else {
+            packet.SetPacketDataSize(0);
+        }
+        packet.SendReply();
+        return;
+    } else if (operation == PicaTraceOperation::Clear) {
+        pica_trace_data.clear();
+    }
+
+    const PicaTraceReply reply{Pica::DebugUtils::IsPicaTracing(), pica_trace_generation,
+                               static_cast<u32>(pica_trace_data.size())};
+    std::memcpy(packet.GetPacketData().data(), &reply, sizeof(reply));
+    packet.SetPacketDataSize(sizeof(reply));
+    packet.SendReply();
+}
+
+void RPCServer::HandlePicaSnapshot(Packet& packet, PicaSnapshotOperation operation, u32 generation,
+                                   u32 offset, u32 size) {
+    if (!system.IsPoweredOn()) {
+        packet.SetPacketDataSize(0);
+        packet.SendReply();
+        return;
+    }
+
+    auto& pica = system.GPU().PicaCore();
+    switch (operation) {
+    case PicaSnapshotOperation::Arm:
+        pica.RequestSnapshot();
+        [[fallthrough]];
+    case PicaSnapshotOperation::Status: {
+        const auto info = pica.GetSnapshotInfo();
+        std::memcpy(packet.GetPacketData().data(), std::addressof(info), sizeof(info));
+        packet.SetPacketDataSize(sizeof(info));
+        break;
+    }
+    case PicaSnapshotOperation::Read:
+        packet.SetPacketDataSize(
+            pica.ReadSnapshot(generation, offset, packet.GetPacketData().first(size)));
+        break;
+    case PicaSnapshotOperation::Clear:
+        pica.ClearSnapshot();
+        packet.SetPacketDataSize(0);
+        break;
+    default:
+        packet.SetPacketDataSize(0);
+        break;
+    }
+    packet.SendReply();
+}
+
+void RPCServer::HandleEmulationControl(Packet& packet, EmulationControl operation,
+                                       const std::string& path) {
+    EmulationControlReply reply{EmulationResult::Unsupported, EmulationState::Stopped};
+    if (emulation_control_handler) {
+        reply = emulation_control_handler(operation, path);
+    }
+    std::memcpy(packet.GetPacketData().data(), &reply, sizeof(reply));
+    packet.SetPacketDataSize(sizeof(reply));
+    packet.SendReply();
+}
+
 bool RPCServer::ValidatePacket(const PacketHeader& packet_header) {
     if (packet_header.version <= CURRENT_VERSION) {
         switch (packet_header.packet_type) {
@@ -126,6 +270,14 @@ bool RPCServer::ValidatePacket(const PacketHeader& packet_header) {
                 return true;
             }
             break;
+        case PacketType::Capabilities:
+            return packet_header.packet_size == 0;
+        case PacketType::EmulationControl:
+            return packet_header.packet_size >= sizeof(u32);
+        case PacketType::PicaSnapshot:
+        case PacketType::PicaBreakpoint:
+        case PacketType::PicaTrace:
+            return packet_header.packet_size >= sizeof(u32);
         default:
             break;
         }
@@ -138,11 +290,15 @@ void RPCServer::HandleSingleRequest(std::unique_ptr<Packet> request_packet) {
     const auto packet_data = request_packet->GetPacketData();
 
     if (ValidatePacket(request_packet->GetHeader())) {
-        // Currently, all request types use to arguments
+        // Legacy request types use two arguments.
         u32 arg1 = 0;
         u32 arg2 = 0;
-        std::memcpy(&arg1, packet_data.data(), sizeof(arg1));
-        std::memcpy(&arg2, packet_data.data() + sizeof(arg1), sizeof(arg2));
+        if (request_packet->GetPacketDataSize() >= sizeof(arg1)) {
+            std::memcpy(&arg1, packet_data.data(), sizeof(arg1));
+        }
+        if (request_packet->GetPacketDataSize() >= sizeof(arg1) + sizeof(arg2)) {
+            std::memcpy(&arg2, packet_data.data() + sizeof(arg1), sizeof(arg2));
+        }
 
         switch (request_packet->GetPacketType()) {
         case PacketType::ReadMemory:
@@ -166,6 +322,60 @@ void RPCServer::HandleSingleRequest(std::unique_ptr<Packet> request_packet) {
             HandleSetGetProcess(*request_packet, arg1, arg2);
             success = true;
             break;
+        case PacketType::Capabilities:
+            HandleCapabilities(*request_packet);
+            success = true;
+            break;
+        case PacketType::EmulationControl: {
+            const auto path_size = request_packet->GetPacketDataSize() - sizeof(u32);
+            const std::string path{reinterpret_cast<const char*>(packet_data.data() + sizeof(u32)),
+                                   path_size};
+            HandleEmulationControl(*request_packet, static_cast<EmulationControl>(arg1), path);
+            success = true;
+            break;
+        }
+        case PacketType::PicaSnapshot: {
+            u32 arg3 = 0;
+            u32 arg4 = 0;
+            if (request_packet->GetPacketDataSize() >= 3 * sizeof(u32)) {
+                std::memcpy(&arg3, packet_data.data() + 2 * sizeof(u32), sizeof(arg3));
+            }
+            if (request_packet->GetPacketDataSize() >= 4 * sizeof(u32)) {
+                std::memcpy(&arg4, packet_data.data() + 3 * sizeof(u32), sizeof(arg4));
+            }
+            if (arg4 <= MAX_PACKET_DATA_SIZE) {
+                HandlePicaSnapshot(*request_packet, static_cast<PicaSnapshotOperation>(arg1), arg2,
+                                   arg3, arg4);
+                success = true;
+            }
+            break;
+        }
+        case PacketType::PicaBreakpoint: {
+            u32 arg3 = 0;
+            if (request_packet->GetPacketDataSize() >= 3 * sizeof(u32)) {
+                std::memcpy(&arg3, packet_data.data() + 2 * sizeof(u32), sizeof(arg3));
+            }
+            HandlePicaBreakpoint(*request_packet, static_cast<PicaBreakpointOperation>(arg1), arg2,
+                                 arg3);
+            success = true;
+            break;
+        }
+        case PacketType::PicaTrace: {
+            u32 arg3 = 0;
+            u32 arg4 = 0;
+            if (request_packet->GetPacketDataSize() >= 3 * sizeof(u32)) {
+                std::memcpy(&arg3, packet_data.data() + 2 * sizeof(u32), sizeof(arg3));
+            }
+            if (request_packet->GetPacketDataSize() >= 4 * sizeof(u32)) {
+                std::memcpy(&arg4, packet_data.data() + 3 * sizeof(u32), sizeof(arg4));
+            }
+            if (arg4 <= MAX_PACKET_DATA_SIZE) {
+                HandlePicaTrace(*request_packet, static_cast<PicaTraceOperation>(arg1), arg2, arg3,
+                                arg4);
+                success = true;
+            }
+            break;
+        }
         default:
             break;
         }

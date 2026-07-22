@@ -10,6 +10,7 @@
 #include "core/hle/service/gsp/gsp_gpu.h"
 #include "core/hle/service/plgldr/plgldr.h"
 #include "core/loader/loader.h"
+#include "core/tracer/recorder.h"
 #include "video_core/debug_utils/debug_utils.h"
 #include "video_core/gpu.h"
 #include "video_core/gpu_debugger.h"
@@ -280,6 +281,9 @@ void GPU::SetBufferSwap(u32 screen_id, const Service::GSP::FrameBufferInfo& info
     }
 
     if (screen_id == 0) {
+        if (impl->debug_context && impl->debug_context->recorder) {
+            impl->debug_context->recorder->FrameFinished();
+        }
         MicroProfileFlip();
         impl->system.perf_stats->EndGameFrame();
         right_eye_disabler->ReportEndFrame();
@@ -356,6 +360,11 @@ void GPU::WriteReg(VAddr addr, u32 data) {
     }
     default:
         UNREACHABLE_MSG("Write to unknown GPU address {:#08X}", addr);
+    }
+
+    if (impl->debug_context && impl->debug_context->recorder) {
+        const PAddr physical_address = addr - 0x1EC00000 + Memory::IO_AREA_PADDR;
+        impl->debug_context->recorder->RegisterWritten(physical_address, data);
     }
 }
 

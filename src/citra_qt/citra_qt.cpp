@@ -71,6 +71,9 @@
 #include "citra_qt/hotkeys.h"
 #include "citra_qt/loading_screen.h"
 #include "citra_qt/movie/movie_play_dialog.h"
+#ifdef ENABLE_SCRIPTING
+#include "citra_qt/rpc_controller.h"
+#endif
 #include "citra_qt/movie/movie_record_dialog.h"
 #include "citra_qt/multiplayer/state.h"
 #include "citra_qt/qt_image_interface.h"
@@ -412,7 +415,7 @@ GMainWindow::GMainWindow(Core::System& system_)
 
     LoadTranslation();
 
-    if (Settings::values.pica_debugging) {
+    if (Settings::values.pica_debugging || Settings::values.enable_rpc_server) {
         Pica::g_debug_context = Pica::DebugContext::Construct();
     } else {
         Pica::g_debug_context.reset();
@@ -533,12 +536,21 @@ GMainWindow::GMainWindow(Core::System& system_)
     physical_devices = GetVulkanPhysicalDevices();
 #endif
 
+#ifdef ENABLE_SCRIPTING
+    if (Settings::values.enable_rpc_server.GetValue()) {
+        rpc_controller = std::make_unique<RPCController>(*this, system);
+    }
+#endif
+
     if (!game_path.isEmpty()) {
         BootGame(game_path);
     }
 }
 
 GMainWindow::~GMainWindow() {
+#ifdef ENABLE_SCRIPTING
+    rpc_controller.reset();
+#endif
     // Will get automatically deleted otherwise
     if (!render_window->parent()) {
         delete render_window;

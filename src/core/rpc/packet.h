@@ -7,6 +7,7 @@
 #include <array>
 #include <functional>
 #include <span>
+#include <string>
 #include "common/common_types.h"
 
 namespace Core::RPC {
@@ -17,7 +18,77 @@ enum class PacketType : u32 {
     WriteMemory = 2,
     ProcessList = 3,
     SetGetProcess = 4,
+    Capabilities = 5,
+    EmulationControl = 6,
+    PicaSnapshot = 7,
+    PicaBreakpoint = 8,
+    PicaTrace = 9,
 };
+
+enum class EmulationControl : u32 {
+    Status = 0,
+    Run = 1,
+    Pause = 2,
+    Resume = 3,
+    Stop = 4,
+    Restart = 5,
+};
+
+enum class EmulationState : u32 {
+    Stopped = 0,
+    Running = 1,
+    Paused = 2,
+};
+
+enum class PicaSnapshotOperation : u32 {
+    Arm = 0,
+    Status = 1,
+    Read = 2,
+    Clear = 3,
+};
+
+enum class PicaBreakpointOperation : u32 {
+    Status = 0,
+    Set = 1,
+    Resume = 2,
+    Clear = 3,
+};
+
+enum class PicaTraceOperation : u32 {
+    Status = 0,
+    Start = 1,
+    Stop = 2,
+    Read = 3,
+    Clear = 4,
+};
+
+struct PicaBreakpointReply {
+    u32 enabled_mask;
+    u32 active_event;
+    u32 at_breakpoint;
+};
+
+struct PicaTraceReply {
+    u32 active;
+    u32 generation;
+    u32 size;
+};
+
+enum class EmulationResult : u32 {
+    Success = 0,
+    InvalidState = 1,
+    InvalidArgument = 2,
+    Unsupported = 3,
+    Failed = 4,
+};
+
+struct EmulationControlReply {
+    EmulationResult result;
+    EmulationState state;
+};
+
+using EmulationControlHandler =
+    std::function<EmulationControlReply(EmulationControl, const std::string&)>;
 
 struct PacketHeader {
     u32 version;
@@ -41,6 +112,10 @@ constexpr u32 MAX_PACKET_DATA_SIZE = 1024;
 constexpr u32 MAX_PACKET_SIZE = MIN_PACKET_SIZE + MAX_PACKET_DATA_SIZE;
 constexpr u32 MAX_READ_SIZE = MAX_PACKET_DATA_SIZE;
 constexpr u32 MAX_PROCESSES_IN_LIST = (MAX_PACKET_DATA_SIZE - sizeof(u32)) / sizeof(ProcessInfo);
+constexpr u32 CAPABILITY_EMULATION_CONTROL = 1U << 0;
+constexpr u32 CAPABILITY_PICA_SNAPSHOT = 1U << 1;
+constexpr u32 CAPABILITY_PICA_BREAKPOINT = 1U << 2;
+constexpr u32 CAPABILITY_PICA_TRACE = 1U << 3;
 
 class Packet {
 public:

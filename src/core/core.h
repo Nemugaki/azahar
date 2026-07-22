@@ -6,6 +6,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -19,6 +20,9 @@
 #include "core/hle/service/plgldr/plgldr.h"
 #include "core/movie.h"
 #include "core/perf_stats.h"
+#ifdef ENABLE_SCRIPTING
+#include "core/rpc/packet.h"
+#endif
 
 namespace Frontend {
 class EmuWindow;
@@ -373,6 +377,11 @@ public:
 
     /// Applies any changes to settings to this core instance.
     void ApplySettings();
+
+#ifdef ENABLE_SCRIPTING
+    void StartRPCServer(RPC::EmulationControlHandler emulation_control_handler);
+    void StopRPCServer();
+#endif
 
     void RegisterAppLoaderEarly(std::unique_ptr<Loader::AppLoader>& loader);
 

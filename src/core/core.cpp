@@ -79,6 +79,18 @@ System::System() : movie{*this}, cheat_engine{*this} {}
 
 System::~System() = default;
 
+#ifdef ENABLE_SCRIPTING
+void System::StartRPCServer(RPC::EmulationControlHandler emulation_control_handler) {
+    if (!rpc_server) {
+        rpc_server = std::make_unique<RPC::Server>(*this, std::move(emulation_control_handler));
+    }
+}
+
+void System::StopRPCServer() {
+    rpc_server.reset();
+}
+#endif
+
 System::ResultStatus System::RunLoop(bool tight_loop) {
     status = ResultStatus::Success;
     if (!IsPoweredOn()) {
@@ -556,12 +568,6 @@ System::ResultStatus System::Init(Frontend::EmuWindow& emu_window,
                       Settings::values.output_device.GetValue());
     dsp_core->EnableStretching(Settings::values.enable_audio_stretching.GetValue());
 
-#ifdef ENABLE_SCRIPTING
-    if (Settings::values.enable_rpc_server.GetValue()) {
-        rpc_server = std::make_unique<RPC::Server>(*this);
-    }
-#endif
-
     service_manager = std::make_unique<Service::SM::ServiceManager>(*this);
     archive_manager = std::make_unique<Service::FS::ArchiveManager>(*this);
 
@@ -703,9 +709,6 @@ void System::Shutdown(bool is_deserializing) {
         app_loader.reset();
     }
     custom_tex_manager.reset();
-#ifdef ENABLE_SCRIPTING
-    rpc_server.reset();
-#endif
     archive_manager.reset();
     service_manager.reset();
     dsp_core.reset();

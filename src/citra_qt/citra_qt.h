@@ -95,11 +95,15 @@ enum class MediaType : u32;
 
 int LaunchQtFrontend(int argc, char* argv[]);
 
+class RPCController;
+
 class GMainWindow : public QMainWindow {
     Q_OBJECT
 
     /// Max number of recently loaded items to keep track of
     static const int max_recent_files_item = 10;
+
+    friend class RPCController;
 
 public:
     void filterBarSetChecked(bool state);
@@ -375,6 +379,9 @@ private:
     // isn't created before the check is performed
     UserDataMigrator user_data_migrator;
     std::unique_ptr<QtConfig> config;
+#ifdef ENABLE_SCRIPTING
+    std::unique_ptr<RPCController> rpc_controller;
+#endif
 
     // Hotkeys
     bool turbo_mode_active = false;

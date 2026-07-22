@@ -2,6 +2,7 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
+#include <nihstro/float24.h>
 #include "common/arch.h"
 #include "common/archives.h"
 #include "common/microprofile.h"
@@ -9,6 +10,7 @@
 #include "common/settings.h"
 #include "core/core.h"
 #include "core/memory.h"
+#include "core/tracer/recorder.h"
 #include "video_core/debug_utils/debug_utils.h"
 #include "video_core/pica/pica_core.h"
 #include "video_core/pica/vertex_loader.h"
@@ -53,6 +55,94 @@ PicaCore::PicaCore(Memory::MemorySystem& memory_, std::shared_ptr<DebugContext> 
 }
 
 PicaCore::~PicaCore() = default;
+
+void PicaCore::RequestSnapshot() {
+    snapshot_requested = true;
+}
+
+PicaCore::SnapshotInfo PicaCore::GetSnapshotInfo() const {
+    std::lock_guard lock{snapshot_mutex};
+    return {snapshot_generation, static_cast<u32>(snapshot.size())};
+}
+
+u32 PicaCore::ReadSnapshot(u32 generation, u32 offset, std::span<u8> output) const {
+    std::lock_guard lock{snapshot_mutex};
+    if (generation != snapshot_generation || offset >= snapshot.size()) {
+        return 0;
+    }
+    const u32 size =
+        std::min(static_cast<u32>(output.size()), static_cast<u32>(snapshot.size() - offset));
+    std::memcpy(output.data(), snapshot.data() + offset, size);
+    return size;
+}
+
+void PicaCore::ClearSnapshot() {
+    std::lock_guard lock{snapshot_mutex};
+    snapshot.clear();
+}
+
+void PicaCore::CaptureSnapshot() {
+    if (!snapshot_requested.exchange(false)) {
+        return;
+    }
+
+    struct Section {
+        u32 offset;
+        u32 size;
+    };
+    struct Header {
+        u32 magic;
+        u32 version;
+        u32 generation;
+        u32 section_count;
+        std::array<Section, 8> sections;
+    } header{0x41434950, 1, 0, 8, {}}; // "PICA"
+
+    std::vector<u8> data(sizeof(header));
+    const auto append = [&data](const void* source, u32 size) {
+        const Section section{static_cast<u32>(data.size()), size};
+        const auto* bytes = static_cast<const u8*>(source);
+        data.insert(data.end(), bytes, bytes + size);
+        return section;
+    };
+
+    std::array<u32, 4 * 16> default_attributes{};
+    for (u32 i = 0; i < 16; ++i) {
+        for (u32 component = 0; component < 4; ++component) {
+            default_attributes[4 * i + component] =
+                nihstro::to_float24(input_default_attributes[i][component].ToFloat32());
+        }
+    }
+
+    std::array<u32, 4 * 96> float_uniforms{};
+    for (u32 i = 0; i < 96; ++i) {
+        for (u32 component = 0; component < 4; ++component) {
+            float_uniforms[4 * i + component] =
+                nihstro::to_float24(vs_setup.uniforms.f[i][component].ToFloat32());
+        }
+    }
+
+    u32 bool_uniforms{};
+    for (u32 i = 0; i < vs_setup.uniforms.b.size(); ++i) {
+        bool_uniforms |= static_cast<u32>(vs_setup.uniforms.b[i]) << i;
+    }
+
+    const auto& program = vs_setup.GetProgramCode();
+    const auto& swizzle = vs_setup.GetSwizzleData();
+    header.sections[0] = append(std::addressof(regs), sizeof(regs));
+    header.sections[1] = append(std::addressof(regs_lcd), sizeof(regs_lcd));
+    header.sections[2] = append(default_attributes.data(), sizeof(default_attributes));
+    header.sections[3] = append(program.data(), vs_setup.GetBiggestProgramSize() * sizeof(u32));
+    header.sections[4] = append(swizzle.data(), vs_setup.GetBiggestSwizzleSize() * sizeof(u32));
+    header.sections[5] = append(float_uniforms.data(), sizeof(float_uniforms));
+    header.sections[6] = append(std::addressof(bool_uniforms), sizeof(bool_uniforms));
+    header.sections[7] = append(vs_setup.uniforms.i.data(), sizeof(vs_setup.uniforms.i));
+
+    std::lock_guard lock{snapshot_mutex};
+    header.generation = ++snapshot_generation;
+    std::memcpy(data.data(), std::addressof(header), sizeof(header));
+    snapshot = std::move(data);
+}
 
 void PicaCore::InitializeRegs() {
     // Values initialized by GSP
@@ -106,6 +196,9 @@ void PicaCore::ProcessCmdList(PAddr list, u32 size, bool ignore_list) {
     }
     // Initialize command list tracking.
     const u8* head = memory.GetPhysicalPointer(list);
+    if (debug_context && debug_context->recorder) {
+        debug_context->recorder->MemoryAccessed(head, size, list);
+    }
     cmd_list.Reset(list, head, size);
 
     bool stop_requested = false;
@@ -490,6 +583,8 @@ void PicaCore::SubmitImmediate(u32 value) {
 }
 
 void PicaCore::DrawImmediate() {
+    CaptureSnapshot();
+
     // Compile the vertex shader.
     shader_engine->SetupBatch(vs_setup, regs.internal.vs.main_offset);
 
@@ -534,6 +629,53 @@ void PicaCore::DrawArrays(bool is_indexed) {
     if (debug_context) {
         debug_context->OnEvent(DebugContext::Event::IncomingPrimitiveBatch, nullptr);
     }
+    SCOPE_EXIT({
+        if (debug_context) {
+            debug_context->OnEvent(DebugContext::Event::FinishedPrimitiveBatch, nullptr);
+        }
+    });
+
+    CaptureSnapshot();
+
+    if (debug_context && debug_context->recorder) {
+        const auto& pipeline = regs.internal.pipeline;
+        const PAddr base_address = pipeline.vertex_attributes.GetPhysicalBaseAddress();
+        u32 maximum_vertex = pipeline.vertex_offset + pipeline.num_vertices;
+        if (is_indexed) {
+            const auto& index_info = pipeline.index_array;
+            const u32 index_size = index_info.format != 0 ? sizeof(u16) : sizeof(u8);
+            const u32 size = pipeline.num_vertices * index_size;
+            const PAddr address = base_address + index_info.offset;
+            const u8* indices = memory.GetPhysicalPointer(address);
+            debug_context->recorder->MemoryAccessed(indices, size, address);
+            maximum_vertex = 0;
+            for (u32 index = 0; index < pipeline.num_vertices; ++index) {
+                const u32 vertex = index_size == sizeof(u16)
+                                       ? reinterpret_cast<const u16*>(indices)[index]
+                                       : indices[index];
+                maximum_vertex = std::max(maximum_vertex, vertex + 1);
+            }
+        }
+        for (const auto& loader : pipeline.vertex_attributes.attribute_loaders) {
+            if (loader.component_count == 0 || loader.byte_count == 0) {
+                continue;
+            }
+            const PAddr address = base_address + loader.data_offset;
+            const u32 size = loader.byte_count * maximum_vertex;
+            debug_context->recorder->MemoryAccessed(memory.GetPhysicalPointer(address), size,
+                                                    address);
+        }
+        for (const auto& texture : regs.internal.texturing.GetTextures()) {
+            if (!texture.enabled) {
+                continue;
+            }
+            const PAddr address = texture.config.GetPhysicalAddress();
+            const u32 size = TexturingRegs::NibblesPerPixel(texture.format) * texture.config.width /
+                             2 * texture.config.height;
+            debug_context->recorder->MemoryAccessed(memory.GetPhysicalPointer(address), size,
+                                                    address);
+        }
+    }
 
     const bool accelerate_draw = [this] {
         // Geometry shaders cannot be accelerated due to register preservation.
@@ -571,10 +713,6 @@ void PicaCore::DrawArrays(bool is_indexed) {
 
     // Draw emitted triangles.
     rasterizer->DrawTriangles();
-
-    if (debug_context) {
-        debug_context->OnEvent(DebugContext::Event::FinishedPrimitiveBatch, nullptr);
-    }
 }
 
 void PicaCore::LoadVertices(bool is_indexed) {

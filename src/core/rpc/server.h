@@ -18,7 +18,7 @@ class Packet;
 
 class Server {
 public:
-    explicit Server(Core::System& system_);
+    Server(Core::System& system_, EmulationControlHandler emulation_control_handler);
     ~Server();
 
     void NewRequestCallback(std::unique_ptr<Packet> new_request);
