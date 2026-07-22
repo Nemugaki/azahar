@@ -208,7 +208,8 @@ void EmuWindow::TouchMoved(unsigned framebuffer_x, unsigned framebuffer_y) {
     TouchPressed(framebuffer_x, framebuffer_y);
 }
 
-void EmuWindow::UpdateCurrentFramebufferLayout(u32 width, u32 height, bool is_portrait_mode) {
+void EmuWindow::UpdateCurrentFramebufferLayout(u32 width, u32 height, bool is_portrait_mode,
+                                               bool enforce_minimum) {
     Layout::FramebufferLayout layout;
     const Settings::LayoutOption layout_option = Settings::values.layout_option.GetValue();
     const Settings::StereoRenderOption stereo_option = get3DMode();
@@ -224,8 +225,10 @@ void EmuWindow::UpdateCurrentFramebufferLayout(u32 width, u32 height, bool is_po
                               : Layout::GetMinimumSizeFromLayout(
                                     layout_option, Settings::values.upright_screen.GetValue());
 
-    width = std::max(width, min_size.first);
-    height = std::max(height, min_size.second);
+    if (enforce_minimum) {
+        width = std::max(width, min_size.first);
+        height = std::max(height, min_size.second);
+    }
     if (render_full_stereo) {
         width = width / 2;
     }

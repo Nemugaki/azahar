@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include <functional>
+
 class QDockWidget;
 
 namespace Debugger {
@@ -15,5 +17,11 @@ void SetDockAvailable(QDockWidget* dock, bool available);
 
 /// True when both the user toggle and runtime availability permit the debugger to operate.
 bool IsDockActive(const QDockWidget* dock);
+
+/// True when the user has enabled the debugger, regardless of runtime availability.
+bool IsDockUserEnabled(const QDockWidget* dock);
+
+/// Runs when the workspace Enable/Disable state changes.
+void SetDockActiveHandler(QDockWidget* dock, std::function<void(bool)> handler);
 
 } // namespace Debugger

@@ -30,6 +30,10 @@ namespace VideoCore {
 class RasterizerInterface;
 }
 
+namespace Debugger {
+struct DrawInfo;
+}
+
 namespace Pica {
 
 class DebugContext;
@@ -148,6 +152,9 @@ private:
     void DrawImmediate();
 
     void DrawArrays(bool is_indexed);
+
+    void RecordDebuggerDraw(const Debugger::DrawInfo& info, bool is_indexed, bool capture_geometry);
+    void RecordDebuggerOutput();
 
     void LoadVertices(bool is_indexed);
 

@@ -158,6 +158,8 @@ public:
 
     bool InitRenderTarget();
 
+    void UpdateMinimumSizeForWindowMode();
+
     /// Destroy the previous run's child_widget which should also destroy the child_window
     void ReleaseRenderTarget();
 

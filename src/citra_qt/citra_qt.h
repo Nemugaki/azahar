@@ -56,6 +56,7 @@ class ProfilerWidget;
 class QFileOpenEvent;
 template <typename>
 class QFutureWatcher;
+class QDockWidget;
 class QLabel;
 class QProgressBar;
 class QPushButton;
@@ -354,6 +355,7 @@ private:
 
     GRenderWindow* render_window;
     GRenderWindow* secondary_window;
+    QDockWidget* game_dock_widget;
 
     GameListPlaceholder* game_list_placeholder;
     LoadingScreen* loading_screen;

@@ -5,8 +5,39 @@
 #include "debugger/render_session.h"
 
 #include <algorithm>
+#include <cstring>
 
 namespace Debugger {
+namespace {
+
+u64 ShaderBytes(const Shader& shader) {
+    return static_cast<u64>(shader.code.size() + shader.metadata.size()) * sizeof(u32) +
+           shader.state.size();
+}
+
+bool SameShader(const Shader& left, const Shader& right) {
+    return left.stage == right.stage && left.entry_point == right.entry_point &&
+           left.code == right.code && left.metadata == right.metadata && left.state == right.state;
+}
+
+bool SameResource(const Resource& resource, const ResourceView& view) {
+    return resource.role == view.role && resource.address == view.address &&
+           resource.format == view.format && resource.width == view.width &&
+           resource.height == view.height && resource.stride == view.stride &&
+           resource.bytes.size() == view.bytes.size() &&
+           std::equal(resource.bytes.begin(), resource.bytes.end(), view.bytes.begin());
+}
+
+template <typename T>
+u64 NextId(const std::vector<T>& values) {
+    u64 id{};
+    for (const auto& value : values) {
+        id = std::max(id, value.id);
+    }
+    return id + 1;
+}
+
+} // namespace
 
 void RenderSession::SetRenderTarget(RenderTarget target) {
     std::lock_guard lock{mutex};
@@ -19,15 +50,129 @@ RenderTarget RenderSession::GetRenderTarget() const {
 }
 
 void RenderSession::RecordDraw(const DrawInfo& info) {
+    std::lock_guard lock{mutex};
+    if (!capture_enabled) {
+        return;
+    }
     Record(TimelineKind::Draw, info);
+    draw_write_begin = static_cast<u32>(writes.size());
+}
+
+void RenderSession::RecordDraw(const DrawInfo& info, const Shader& shader,
+                               std::span<const ResourceView> resource_views) {
+    std::lock_guard lock{mutex};
+    if (!capture_enabled) {
+        return;
+    }
+    const auto entry = Record(TimelineKind::Draw, info);
+    if (draws.size() >= capture_limits.draws) {
+        rich_truncated = true;
+        rich_gap_reason = "draw capture limit reached";
+        draw_write_begin = static_cast<u32>(writes.size());
+        return;
+    }
+
+    DrawCapture draw{
+        entry, draw_write_begin, static_cast<u32>(writes.size() - draw_write_begin), 0, {}};
+    draw_write_begin = static_cast<u32>(writes.size());
+
+    const auto existing_shader = std::ranges::find_if(
+        shaders, [&shader](const auto& value) { return SameShader(value, shader); });
+    if (existing_shader != shaders.end()) {
+        draw.shader_id = existing_shader->id;
+    } else {
+        const u64 size = ShaderBytes(shader);
+        if (shaders.size() < capture_limits.shaders &&
+            size <=
+                capture_limits.owned_bytes - std::min(capture_limits.owned_bytes, owned_bytes)) {
+            auto owned = shader;
+            owned.id = NextId(shaders);
+            draw.shader_id = owned.id;
+            owned_bytes += size;
+            shaders.push_back(std::move(owned));
+            capture_capabilities |= CaptureCapability::Shaders;
+        } else {
+            rich_truncated = true;
+            rich_gap_reason = "shader capture limit reached";
+        }
+    }
+
+    for (const auto& view : resource_views) {
+        if (const u64 id = StoreResource(view)) {
+            draw.resources.push_back({view.role, view.slot, id});
+        }
+    }
+    draws.push_back(std::move(draw));
+}
+
+u64 RenderSession::StoreResource(const ResourceView& view) {
+    const auto resource = std::ranges::find_if(
+        resources, [&view](const auto& value) { return SameResource(value, view); });
+    if (resource != resources.end()) {
+        return resource->id;
+    }
+    if (resources.size() >= capture_limits.resources ||
+        view.bytes.size() >
+            capture_limits.owned_bytes - std::min(capture_limits.owned_bytes, owned_bytes)) {
+        rich_truncated = true;
+        rich_gap_reason = "resource capture limit reached";
+        return 0;
+    }
+    Resource owned{NextId(resources), view.role,
+                   view.address,      view.format,
+                   view.width,        view.height,
+                   view.stride,       std::vector<u8>{view.bytes.begin(), view.bytes.end()}};
+    const u64 id = owned.id;
+    owned_bytes += owned.bytes.size();
+    resources.push_back(std::move(owned));
+    capture_capabilities |= CaptureCapability::Resources;
+    return id;
+}
+
+void RenderSession::RecordOutput(const ResourceView& output) {
+    std::lock_guard lock{mutex};
+    if (!capture_enabled || !output_capture_enabled || draws.empty()) {
+        return;
+    }
+    const u64 id = StoreResource(output);
+    if (!id) {
+        return;
+    }
+    auto& references = draws.back().resources;
+    const auto existing = std::ranges::find_if(references, [](const auto& reference) {
+        return reference.role == ResourceRole::ColorTarget;
+    });
+    const ResourceReference reference{ResourceRole::ColorTarget, output.slot, id};
+    if (existing == references.end()) {
+        references.push_back(reference);
+    } else {
+        *existing = reference;
+    }
+}
+
+void RenderSession::RecordRegisterWrite(RegisterWrite write) {
+    std::lock_guard lock{mutex};
+    if (!capture_enabled) {
+        return;
+    }
+    if (writes.size() >= capture_limits.register_writes) {
+        rich_truncated = true;
+        rich_gap_reason = "register write capture limit reached";
+        return;
+    }
+    writes.push_back(write);
+    capture_capabilities |= CaptureCapability::RegisterWrites;
 }
 
 void RenderSession::RecordFrame() {
+    std::lock_guard lock{mutex};
+    if (!capture_enabled) {
+        return;
+    }
     Record(TimelineKind::Frame, {});
 }
 
-void RenderSession::Record(TimelineKind kind, const DrawInfo& info) {
-    std::lock_guard lock{mutex};
+TimelineEntry RenderSession::Record(TimelineKind kind, const DrawInfo& info) {
     if (kind == TimelineKind::Draw) {
         ++draw_index;
     } else {
@@ -46,14 +191,17 @@ void RenderSession::Record(TimelineKind kind, const DrawInfo& info) {
                    ? 8U
                    : 0U;
     previous_target = render_target;
-    timeline.push_back({sequence++, kind, frame_index, draw_index, changed, render_target, info});
+    TimelineEntry entry{sequence++, kind, frame_index, draw_index, changed, render_target, info};
+    timeline.push_back(entry);
     if (timeline.size() > MaxEntries) {
         timeline.pop_front();
         truncated = true;
+        PruneRichCapture();
     }
     if (kind == TimelineKind::Frame) {
         TrimFrames();
     }
+    return entry;
 }
 
 std::vector<TimelineEntry> RenderSession::Query(const TimelineQuery& query) const {
@@ -66,15 +214,16 @@ std::vector<TimelineEntry> RenderSession::Query(const TimelineQuery& query) cons
     const auto matches = [&query](const TimelineEntry& entry) {
         return (!query.filter_kind || entry.kind == query.kind) &&
                (entry.changed_mask & query.required_changes) == query.required_changes &&
-               (query.target_address == Latest || entry.target.color_address == query.target_address ||
+               (query.target_address == Latest ||
+                entry.target.color_address == query.target_address ||
                 entry.target.depth_address == query.target_address) &&
                (query.shader_entry == Latest ||
                 entry.draw_info.vertex_shader_entry == query.shader_entry) &&
                (query.frame == Latest || entry.frame == query.frame);
     };
     if (query.start == Latest) {
-        for (auto entry = timeline.rbegin(); entry != timeline.rend() && result.size() < query.count;
-             ++entry) {
+        for (auto entry = timeline.rbegin();
+             entry != timeline.rend() && result.size() < query.count; ++entry) {
             if (matches(*entry)) {
                 result.push_back(*entry);
             }
@@ -95,13 +244,26 @@ std::vector<TimelineEntry> RenderSession::Query(const TimelineQuery& query) cons
 
 TimelineStatus RenderSession::GetStatus() const {
     std::lock_guard lock{mutex};
-    return {static_cast<u32>(timeline.size()), timeline.empty() ? sequence : timeline.front().sequence,
+    return {static_cast<u32>(timeline.size()),
+            timeline.empty() ? sequence : timeline.front().sequence,
             timeline.empty() ? sequence : timeline.back().sequence, truncated};
 }
 
 TimelinePosition RenderSession::GetPosition() const {
     std::lock_guard lock{mutex};
     return {frame_index, draw_index};
+}
+
+void RenderSession::ClearRichCapture(const char* reason) {
+    writes.clear();
+    draws.clear();
+    shaders.clear();
+    resources.clear();
+    draw_write_begin = 0;
+    owned_bytes = 0;
+    capture_capabilities = CaptureCapability::Timeline;
+    rich_truncated = true;
+    rich_gap_reason = reason;
 }
 
 void RenderSession::Clear() {
@@ -112,6 +274,15 @@ void RenderSession::Clear() {
     frame_index = 0;
     draw_index = 0;
     truncated = false;
+    writes.clear();
+    draws.clear();
+    shaders.clear();
+    resources.clear();
+    draw_write_begin = 0;
+    rich_truncated = false;
+    rich_gap_reason.clear();
+    capture_capabilities = CaptureCapability::Timeline;
+    owned_bytes = 0;
 }
 
 void RenderSession::SetFrameLimit(u32 limit) {
@@ -120,19 +291,72 @@ void RenderSession::SetFrameLimit(u32 limit) {
     TrimFrames();
 }
 
+void RenderSession::SetCaptureLimits(CaptureLimits limits) {
+    std::lock_guard lock{mutex};
+    capture_limits = limits;
+    if (writes.size() > limits.register_writes || draws.size() > limits.draws ||
+        shaders.size() > limits.shaders || resources.size() > limits.resources ||
+        owned_bytes > limits.owned_bytes) {
+        ClearRichCapture("rich capture reset after limit change");
+    }
+}
+
+void RenderSession::SetCaptureEnabled(bool enabled) {
+    std::lock_guard lock{mutex};
+    capture_enabled = enabled;
+}
+
+bool RenderSession::IsCaptureEnabled() const {
+    std::lock_guard lock{mutex};
+    return capture_enabled;
+}
+
+void RenderSession::SetOutputCaptureEnabled(bool enabled) {
+    std::lock_guard lock{mutex};
+    output_capture_enabled = enabled;
+}
+
+bool RenderSession::IsOutputCaptureEnabled() const {
+    std::lock_guard lock{mutex};
+    return output_capture_enabled;
+}
+
 bool RenderSession::Replace(std::vector<TimelineEntry> entries, bool was_truncated) {
-    for (std::size_t index = 0; index < entries.size(); ++index) {
-        if (entries[index].kind > TimelineKind::Frame ||
-            entries[index].draw_info.mode > DrawMode::Immediate ||
-            (index && entries[index - 1].sequence >= entries[index].sequence)) {
+    Capture capture;
+    capture.timeline = std::move(entries);
+    capture.truncated = was_truncated;
+    return Replace(std::move(capture));
+}
+
+bool RenderSession::Replace(Capture capture) {
+    for (std::size_t index = 0; index < capture.timeline.size(); ++index) {
+        if (capture.timeline[index].kind > TimelineKind::Frame ||
+            capture.timeline[index].draw_info.mode > DrawMode::Immediate ||
+            (index && capture.timeline[index - 1].sequence >= capture.timeline[index].sequence)) {
             return false;
         }
     }
 
     std::lock_guard lock{mutex};
-    const auto first = entries.size() > MaxEntries ? entries.end() - MaxEntries : entries.begin();
-    timeline.assign(first, entries.end());
-    truncated = was_truncated || first != entries.begin();
+    const auto first = capture.timeline.size() > MaxEntries ? capture.timeline.end() - MaxEntries
+                                                            : capture.timeline.begin();
+    timeline.assign(first, capture.timeline.end());
+    truncated = capture.truncated || first != capture.timeline.begin();
+    capture_capabilities = capture.capabilities;
+    rich_truncated = !capture.complete;
+    rich_gap_reason = std::move(capture.gap_reason);
+    owned_bytes = capture.owned_bytes;
+    writes = std::move(capture.writes);
+    shaders = std::move(capture.shaders);
+    resources = std::move(capture.resources);
+    draws.clear();
+    const u32 first_sequence = timeline.empty() ? 0 : timeline.front().sequence;
+    for (auto& draw : capture.draws) {
+        if (draw.timeline.sequence >= first_sequence) {
+            draws.push_back(std::move(draw));
+        }
+    }
+    draw_write_begin = static_cast<u32>(writes.size());
     if (timeline.empty()) {
         render_target = {};
         previous_target = {};
@@ -150,17 +374,129 @@ bool RenderSession::Replace(std::vector<TimelineEntry> entries, bool was_truncat
     return true;
 }
 
+void RenderSession::Snapshot(Capture& capture) const {
+    std::lock_guard lock{mutex};
+    capture.capabilities = capture_capabilities;
+    capture.complete = !rich_truncated;
+    capture.truncated = truncated || rich_truncated;
+    capture.gap_reason = rich_gap_reason;
+    capture.owned_bytes = owned_bytes;
+    capture.timeline.assign(timeline.begin(), timeline.end());
+    capture.writes = writes;
+    capture.draws = draws;
+    capture.shaders = shaders;
+    capture.resources = resources;
+}
+
+CaptureStatus RenderSession::GetCaptureStatus() const {
+    std::lock_guard lock{mutex};
+    return {capture_capabilities, !rich_truncated, truncated || rich_truncated};
+}
+
+std::optional<DrawDetails> RenderSession::GetDrawDetails(u32 sequence_value) const {
+    std::lock_guard lock{mutex};
+    const auto draw = std::ranges::find_if(draws, [sequence_value](const auto& value) {
+        return value.timeline.sequence == sequence_value;
+    });
+    return draw == draws.end()
+               ? std::nullopt
+               : std::optional<DrawDetails>{{draw->write_count, draw->shader_id,
+                                             static_cast<u32>(draw->resources.size())}};
+}
+
+std::optional<Resource> RenderSession::GetDrawOutput(u32 sequence_value) const {
+    std::lock_guard lock{mutex};
+    const auto draw = std::ranges::find_if(draws, [sequence_value](const auto& value) {
+        return value.timeline.sequence == sequence_value;
+    });
+    if (draw == draws.end()) {
+        return std::nullopt;
+    }
+    const auto reference = std::ranges::find_if(
+        draw->resources, [](const auto& value) { return value.role == ResourceRole::ColorTarget; });
+    if (reference == draw->resources.end()) {
+        return std::nullopt;
+    }
+    const auto resource = std::ranges::find_if(
+        resources, [id = reference->resource_id](const auto& value) { return value.id == id; });
+    return resource == resources.end() ? std::nullopt : std::optional<Resource>{*resource};
+}
+
+void RenderSession::PruneRichCapture() {
+    if (timeline.empty()) {
+        writes.clear();
+        draws.clear();
+        shaders.clear();
+        resources.clear();
+        draw_write_begin = 0;
+        owned_bytes = 0;
+        capture_capabilities = CaptureCapability::Timeline;
+        return;
+    }
+
+    const u32 first_sequence = timeline.front().sequence;
+    std::erase_if(draws, [first_sequence](const auto& draw) {
+        return draw.timeline.sequence < first_sequence;
+    });
+    if (draws.empty()) {
+        const u32 removed_writes = std::min<u32>(draw_write_begin, writes.size());
+        writes.erase(writes.begin(), writes.begin() + removed_writes);
+        draw_write_begin = 0;
+    } else {
+        const u32 removed_writes = std::min<u32>(draws.front().write_begin, writes.size());
+        writes.erase(writes.begin(), writes.begin() + removed_writes);
+        for (auto& draw : draws) {
+            draw.write_begin -= removed_writes;
+        }
+        draw_write_begin -= std::min(draw_write_begin, removed_writes);
+    }
+
+    std::erase_if(shaders, [this](const auto& shader) {
+        return std::ranges::none_of(
+            draws, [&shader](const auto& draw) { return draw.shader_id == shader.id; });
+    });
+    std::erase_if(resources, [this](const auto& resource) {
+        return std::ranges::none_of(draws, [&resource](const auto& draw) {
+            return std::ranges::any_of(draw.resources, [&resource](const auto& reference) {
+                return reference.resource_id == resource.id;
+            });
+        });
+    });
+    owned_bytes = 0;
+    for (const auto& shader : shaders) {
+        owned_bytes += ShaderBytes(shader);
+    }
+    for (const auto& resource : resources) {
+        owned_bytes += resource.bytes.size();
+    }
+    capture_capabilities = CaptureCapability::Timeline;
+    if (!writes.empty()) {
+        capture_capabilities |= CaptureCapability::RegisterWrites;
+    }
+    if (!shaders.empty()) {
+        capture_capabilities |= CaptureCapability::Shaders;
+    }
+    if (!resources.empty()) {
+        capture_capabilities |= CaptureCapability::Resources;
+    }
+}
+
 void RenderSession::TrimFrames() {
+    bool removed = false;
     while (!timeline.empty() && frame_index >= timeline.front().frame &&
            frame_index - timeline.front().frame >= frame_limit) {
         timeline.pop_front();
         truncated = true;
+        removed = true;
+    }
+    if (removed) {
+        PruneRichCapture();
     }
 }
 
 RenderSessionManager::RenderSessionManager() {
     sessions.push_back({{LiveSessionId, "Azahar", "Pica", Timeline, true, true, false},
-                        std::make_shared<RenderSession>(), {}});
+                        std::make_shared<RenderSession>()});
 }
 
 std::shared_ptr<RenderSession> RenderSessionManager::GetLive() const {
@@ -186,15 +522,22 @@ std::vector<SessionDescriptor> RenderSessionManager::List() const {
     result.reserve(sessions.size());
     for (const auto& stored : sessions) {
         auto descriptor = stored.descriptor;
-        descriptor.truncated |= stored.session->GetStatus().truncated;
+        const auto status = stored.session->GetCaptureStatus();
+        descriptor.capabilities = status.capabilities;
+        descriptor.complete &= status.complete;
+        descriptor.truncated |= status.truncated;
         result.push_back(std::move(descriptor));
     }
     return result;
 }
 
 u64 RenderSessionManager::AddImported(Capture capture) {
+    const auto producer = capture.producer;
+    const auto backend = capture.backend;
+    const u64 capabilities = capture.capabilities;
+    const bool complete = capture.complete;
     auto session = std::make_shared<RenderSession>();
-    if (!session->Replace(std::move(capture.timeline), capture.truncated)) {
+    if (!session->Replace(std::move(capture))) {
         return 0;
     }
     const bool truncated = session->GetStatus().truncated;
@@ -202,15 +545,9 @@ u64 RenderSessionManager::AddImported(Capture capture) {
     if (sessions.size() >= MaxImportedSessions + 1) {
         return 0;
     }
-    SessionDescriptor descriptor{next_id++,
-                                 std::move(capture.producer),
-                                 std::move(capture.backend),
-                                 capture.capabilities,
-                                 false,
-                                 capture.complete,
-                                 truncated};
-    sessions.push_back(
-        {std::move(descriptor), std::move(session), std::move(capture.gap_reason)});
+    SessionDescriptor descriptor{next_id++, producer, backend,  capabilities,
+                                 false,     complete, truncated};
+    sessions.push_back({std::move(descriptor), std::move(session)});
     active_id = sessions.back().descriptor.id;
     return active_id;
 }
@@ -218,7 +555,6 @@ u64 RenderSessionManager::AddImported(Capture capture) {
 bool RenderSessionManager::Snapshot(u64 id, Capture& capture) const {
     std::shared_ptr<RenderSession> session;
     SessionDescriptor descriptor;
-    std::string gap_reason;
     {
         std::lock_guard lock{sessions_mutex};
         const auto found = std::ranges::find_if(
@@ -228,17 +564,12 @@ bool RenderSessionManager::Snapshot(u64 id, Capture& capture) const {
         }
         session = found->session;
         descriptor = found->descriptor;
-        gap_reason = found->gap_reason;
     }
-    const auto status = session->GetStatus();
-    capture = {descriptor.producer,
-               descriptor.backend,
-               descriptor.capabilities,
-               descriptor.complete,
-               descriptor.truncated || status.truncated,
-               std::move(gap_reason),
-               session->Query({.start = RenderSession::Latest,
-                               .count = RenderSession::MaxEntries})};
+    session->Snapshot(capture);
+    capture.producer = descriptor.producer;
+    capture.backend = descriptor.backend;
+    capture.complete &= descriptor.complete;
+    capture.truncated |= descriptor.truncated;
     return true;
 }
 

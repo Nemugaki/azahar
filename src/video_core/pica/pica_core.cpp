@@ -3,6 +3,8 @@
 // Refer to the license.txt file included.
 
 #include <algorithm>
+#include <cstring>
+#include <limits>
 #include <nihstro/float24.h>
 #include "common/arch.h"
 #include "common/archives.h"
@@ -63,10 +65,9 @@ void PicaCore::RequestSnapshot() {
 
 PicaCore::SnapshotInfo PicaCore::GetSnapshotInfo() const {
     std::lock_guard lock{snapshot_mutex};
-    return snapshots.empty()
-               ? SnapshotInfo{snapshot_generation, 0}
-               : SnapshotInfo{snapshots.back().generation,
-                              static_cast<u32>(snapshots.back().data.size())};
+    return snapshots.empty() ? SnapshotInfo{snapshot_generation, 0}
+                             : SnapshotInfo{snapshots.back().generation,
+                                            static_cast<u32>(snapshots.back().data.size())};
 }
 
 u32 PicaCore::ReadSnapshot(u32 generation, u32 offset, std::span<u8> output) const {
@@ -92,11 +93,11 @@ void PicaCore::UpdateDebugRenderTarget() {
         return;
     }
     const auto& framebuffer = regs.internal.framebuffer.framebuffer;
-    debug_context->SetRenderTargetInfo(
-        {framebuffer.GetColorBufferPhysicalAddress(), framebuffer.GetDepthBufferPhysicalAddress(),
-         framebuffer.GetWidth(), framebuffer.GetHeight(),
-         static_cast<u32>(framebuffer.color_format.Value()),
-         static_cast<u32>(framebuffer.depth_format.Value())});
+    debug_context->SetRenderTargetInfo({framebuffer.GetColorBufferPhysicalAddress(),
+                                        framebuffer.GetDepthBufferPhysicalAddress(),
+                                        framebuffer.GetWidth(), framebuffer.GetHeight(),
+                                        static_cast<u32>(framebuffer.color_format.Value()),
+                                        static_cast<u32>(framebuffer.depth_format.Value())});
 }
 
 void PicaCore::CaptureSnapshot() {
@@ -624,10 +625,10 @@ void PicaCore::SubmitImmediate(u32 value) {
 void PicaCore::DrawImmediate() {
     UpdateDebugRenderTarget();
     if (debug_context) {
-        debug_context->OnDraw({Debugger::DrawMode::Immediate, 1,
-                               static_cast<u32>(regs.internal.pipeline.triangle_topology.Value()),
-                               0,
-                               regs.internal.vs.main_offset});
+        RecordDebuggerDraw({Debugger::DrawMode::Immediate, 1,
+                            static_cast<u32>(regs.internal.pipeline.triangle_topology.Value()), 0,
+                            regs.internal.vs.main_offset},
+                           false, false);
     }
     CaptureSnapshot();
 
@@ -661,6 +662,7 @@ void PicaCore::DrawImmediate() {
 
     // Flush the immediate triangle.
     rasterizer->DrawTriangles();
+    RecordDebuggerOutput();
     immediate.current_attribute = 0;
 
     if (debug_context) {
@@ -675,11 +677,11 @@ void PicaCore::DrawArrays(bool is_indexed) {
 
     // Track vertex in the debug recorder.
     if (debug_context) {
-        debug_context->OnDraw(
-            {is_indexed ? Debugger::DrawMode::Indexed : Debugger::DrawMode::Arrays,
-             regs.internal.pipeline.num_vertices,
-             static_cast<u32>(regs.internal.pipeline.triangle_topology.Value()),
-             regs.internal.pipeline.vertex_offset, regs.internal.vs.main_offset});
+        RecordDebuggerDraw({is_indexed ? Debugger::DrawMode::Indexed : Debugger::DrawMode::Arrays,
+                            regs.internal.pipeline.num_vertices,
+                            static_cast<u32>(regs.internal.pipeline.triangle_topology.Value()),
+                            regs.internal.pipeline.vertex_offset, regs.internal.vs.main_offset},
+                           is_indexed, true);
     }
     SCOPE_EXIT({
         if (debug_context) {
@@ -761,6 +763,7 @@ void PicaCore::DrawArrays(bool is_indexed) {
 
     // Attempt to use hardware vertex shaders if possible.
     if (accelerate_draw && rasterizer->AccelerateDrawBatch(is_indexed)) {
+        RecordDebuggerOutput();
         return;
     }
 
@@ -769,6 +772,130 @@ void PicaCore::DrawArrays(bool is_indexed) {
 
     // Draw emitted triangles.
     rasterizer->DrawTriangles();
+    RecordDebuggerOutput();
+}
+
+void PicaCore::RecordDebuggerDraw(const Debugger::DrawInfo& info, bool is_indexed,
+                                  bool capture_geometry) {
+    if (!debug_context->GetRenderSession()->IsCaptureEnabled()) {
+        return;
+    }
+    Debugger::Shader shader;
+    shader.stage = 0;
+    shader.entry_point = regs.internal.vs.main_offset;
+    const auto& program = vs_setup.GetProgramCode();
+    const auto& swizzles = vs_setup.GetSwizzleData();
+    shader.code.assign(program.begin(), program.begin() + vs_setup.GetBiggestProgramSize());
+    shader.metadata.assign(swizzles.begin(), swizzles.begin() + vs_setup.GetBiggestSwizzleSize());
+    shader.state.resize(sizeof(vs_setup.uniforms));
+    std::memcpy(shader.state.data(), &vs_setup.uniforms, sizeof(vs_setup.uniforms));
+
+    std::vector<Debugger::ResourceView> resources;
+    resources.reserve(8);
+    const auto add_resource = [&](Debugger::ResourceRole role, u32 slot, PAddr address, u32 format,
+                                  u32 width, u32 height, u32 stride, u64 size) {
+        if (size > std::numeric_limits<u32>::max()) {
+            return;
+        }
+        const u8* data = size ? memory.GetPhysicalPointer(address) : nullptr;
+        if (data || !size) {
+            resources.push_back({role,
+                                 slot,
+                                 address,
+                                 format,
+                                 width,
+                                 height,
+                                 stride,
+                                 {data, static_cast<u32>(size)}});
+        }
+    };
+
+    const auto target = debug_context->GetRenderSession()->GetRenderTarget();
+    add_resource(Debugger::ResourceRole::ColorTarget, 0, target.color_address, target.color_format,
+                 target.width, target.height, 0, 0);
+    add_resource(Debugger::ResourceRole::DepthTarget, 0, target.depth_address, target.depth_format,
+                 target.width, target.height, 0, 0);
+
+    if (capture_geometry) {
+        const auto& pipeline = regs.internal.pipeline;
+        const PAddr base_address = pipeline.vertex_attributes.GetPhysicalBaseAddress();
+        u32 maximum_vertex = pipeline.vertex_offset + pipeline.num_vertices;
+        if (is_indexed) {
+            const auto& index_info = pipeline.index_array;
+            const u32 index_size = index_info.format != 0 ? sizeof(u16) : sizeof(u8);
+            const u32 size = pipeline.num_vertices * index_size;
+            const PAddr address = base_address + index_info.offset;
+            const u8* indices = memory.GetPhysicalPointer(address);
+            add_resource(Debugger::ResourceRole::IndexBuffer, 0, address, index_info.format, 0, 0,
+                         index_size, size);
+            maximum_vertex = 0;
+            if (indices) {
+                for (u32 index = 0; index < pipeline.num_vertices; ++index) {
+                    const u32 vertex = index_size == sizeof(u16)
+                                           ? reinterpret_cast<const u16*>(indices)[index]
+                                           : indices[index];
+                    maximum_vertex = std::max(maximum_vertex, vertex + 1);
+                }
+            }
+        }
+        u32 slot{};
+        for (const auto& loader : pipeline.vertex_attributes.attribute_loaders) {
+            if (loader.component_count && loader.byte_count) {
+                const PAddr address = base_address + loader.data_offset;
+                add_resource(Debugger::ResourceRole::VertexBuffer, slot, address, 0, 0, 0,
+                             loader.byte_count,
+                             static_cast<u64>(loader.byte_count) * maximum_vertex);
+            }
+            ++slot;
+        }
+    }
+
+    u32 texture_slot{};
+    for (const auto& texture : regs.internal.texturing.GetTextures()) {
+        if (texture.enabled) {
+            const u32 nibbles = TexturingRegs::NibblesPerPixel(texture.format);
+            add_resource(
+                Debugger::ResourceRole::Texture, texture_slot, texture.config.GetPhysicalAddress(),
+                static_cast<u32>(texture.format), texture.config.width, texture.config.height, 0,
+                static_cast<u64>(nibbles) * texture.config.width / 2 * texture.config.height);
+        }
+        ++texture_slot;
+    }
+    debug_context->OnDraw(info, shader, resources);
+}
+
+void PicaCore::RecordDebuggerOutput() {
+    if (!debug_context) {
+        return;
+    }
+    const auto session = debug_context->GetRenderSession();
+    if (!session->IsCaptureEnabled() || !session->IsOutputCaptureEnabled()) {
+        return;
+    }
+
+    const auto& framebuffer = regs.internal.framebuffer.framebuffer;
+    const u32 width = framebuffer.GetWidth();
+    const u32 height = framebuffer.GetHeight();
+    const u32 bytes_per_pixel = FramebufferRegs::BytesPerColorPixel(framebuffer.color_format);
+    const u32 stride = width * bytes_per_pixel;
+    const u64 size = static_cast<u64>(stride) * height;
+    if (!size || size > std::numeric_limits<u32>::max()) {
+        return;
+    }
+    const PAddr address = framebuffer.GetColorBufferPhysicalAddress();
+    rasterizer->FlushRegion(address, static_cast<u32>(size));
+    const u8* bytes = memory.GetPhysicalPointer(address);
+    if (!bytes) {
+        return;
+    }
+    session->RecordOutput({Debugger::ResourceRole::ColorTarget,
+                           0,
+                           address,
+                           static_cast<u32>(framebuffer.color_format.Value()),
+                           width,
+                           height,
+                           stride,
+                           {bytes, static_cast<u32>(size)}});
 }
 
 void PicaCore::LoadVertices(bool is_indexed) {

@@ -26,6 +26,7 @@ public:
     ~IPCRecorderWidget();
 
     void OnEmulationStarting();
+    void SetWorkspaceActive(bool active);
 
 signals:
     void EntryUpdated(IPCDebugger::RequestRecord record);
@@ -45,6 +46,7 @@ private:
     std::unique_ptr<Ui::IPCRecorder> ui;
     IPCDebugger::CallbackHandle handle;
     Core::System& system;
+    bool workspace_active{true};
     // The offset between record id and row id, assuming record ids are assigned
     // continuously and only the 'Clear' action can be performed, this is enough.
     // The initial value is 1, which means record 1 = row 0.

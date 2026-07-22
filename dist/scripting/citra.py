@@ -25,6 +25,11 @@ class RequestType(enum.IntEnum):
     CPURegisters = 10,
     GXCommandTrace = 11,
     PicaShader = 12,
+    PicaTimeline = 13,
+    PicaRenderTarget = 14,
+    DebugState = 15,
+    DebugCapture = 16,
+    RenderSession = 17,
 
 class EmulationControl(enum.IntEnum):
     Status = 0
@@ -38,6 +43,7 @@ class EmulationControl(enum.IntEnum):
     SaveState = 8
     LoadState = 9
     Screenshot = 10
+    FrameAdvance = 11
 
 class EmulationState(enum.IntEnum):
     Stopped = 0
@@ -132,6 +138,89 @@ class Citra:
 
     def screenshot(self, path):
         return self.emulation_control(EmulationControl.Screenshot, str(path))
+
+    def frame_advance(self):
+        return self.emulation_control(EmulationControl.FrameAdvance)
+
+    def pica_timeline(self, start=0xFFFFFFFF, count=20, kind=0xFFFFFFFF,
+                      required_changes=0, target_address=0xFFFFFFFF,
+                      shader_entry=0xFFFFFFFF, frame=0xFFFFFFFF):
+        request = struct.pack("8I", 0, start, count, kind, required_changes,
+                              target_address, shader_entry, frame)
+        reply = self._request(RequestType.PicaTimeline, request)
+        if reply is None or len(reply) < 4:
+            return None
+        returned = struct.unpack_from("I", reply)[0]
+        if len(reply) != 4 + returned * 0x40:
+            return None
+        return [struct.unpack_from("16I", reply, 4 + index * 0x40)
+                for index in range(returned)]
+
+    def pica_timeline_status(self):
+        reply = self._request(RequestType.PicaTimeline, struct.pack("I", 2))
+        return struct.unpack("4I", reply) if reply and len(reply) == 16 else None
+
+    def clear_pica_timeline(self):
+        return self._request(RequestType.PicaTimeline, struct.pack("I", 1)) is not None
+
+    def pica_render_target(self):
+        reply = self._request(RequestType.PicaRenderTarget, struct.pack("I", 0))
+        return struct.unpack("6I", reply) if reply and len(reply) == 24 else None
+
+    def render_sessions(self, start=0, count=15):
+        reply = self._request(RequestType.RenderSession,
+                              struct.pack("5I", 0, 0, 0, start, count))
+        if reply is None or len(reply) < 4:
+            return None
+        returned = struct.unpack_from("I", reply)[0]
+        if len(reply) != 4 + returned * 0x40:
+            return None
+        sessions = []
+        for index in range(returned):
+            session_id, capabilities, flags, producer, backend = struct.unpack_from(
+                "QQI20s20s", reply, 4 + index * 0x40)
+            sessions.append({
+                "id": session_id,
+                "capabilities": capabilities,
+                "live": bool(flags & 1),
+                "active": bool(flags & 2),
+                "complete": bool(flags & 4),
+                "truncated": bool(flags & 8),
+                "producer": producer.rstrip(b"\0").decode("utf-8", errors="replace"),
+                "backend": backend.rstrip(b"\0").decode("utf-8", errors="replace"),
+            })
+        return sessions
+
+    def render_session(self, operation, session_id=0, path=""):
+        request = struct.pack("5I", operation, session_id & 0xFFFFFFFF,
+                              session_id >> 32, 0, 0) + str(path).encode("utf-8")
+        reply = self._request(RequestType.RenderSession, request)
+        if reply is None or len(reply) != 0x40:
+            return None
+        result_id, capabilities, flags, producer, backend = struct.unpack_from(
+            "QQI20s20s", reply)
+        return {
+            "id": result_id,
+            "capabilities": capabilities,
+            "live": bool(flags & 1),
+            "active": bool(flags & 2),
+            "complete": bool(flags & 4),
+            "truncated": bool(flags & 8),
+            "producer": producer.rstrip(b"\0").decode("utf-8", errors="replace"),
+            "backend": backend.rstrip(b"\0").decode("utf-8", errors="replace"),
+        }
+
+    def select_render_session(self, session_id):
+        return self.render_session(1, session_id)
+
+    def remove_render_session(self, session_id):
+        return self.render_session(2, session_id)
+
+    def import_render_capture(self, path):
+        return self.render_session(3, path=path)
+
+    def export_render_capture(self, path, session_id=0):
+        return self.render_session(4, session_id, path)
 
     def pica_snapshot_status(self):
         reply = self._request(RequestType.PicaSnapshot, struct.pack("I", 1))

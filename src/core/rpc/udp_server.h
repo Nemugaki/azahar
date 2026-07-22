@@ -17,8 +17,7 @@ u16 GetRPCPort();
 
 class UDPServer {
 public:
-    UDPServer(std::function<void(std::unique_ptr<Packet>)> new_request_callback,
-              ClientCountHandler client_count_handler);
+    explicit UDPServer(std::function<void(std::unique_ptr<Packet>)> new_request_callback);
     ~UDPServer();
 
 private:

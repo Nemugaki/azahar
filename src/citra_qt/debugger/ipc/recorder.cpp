@@ -110,6 +110,8 @@ void IPCRecorderWidget::SetEnabled(bool enabled) {
         return;
     }
 
+    enabled = enabled && workspace_active;
+
     auto& ipc_recorder = system.Kernel().GetIPCRecorder();
     ipc_recorder.SetEnabled(enabled);
 
@@ -118,7 +120,13 @@ void IPCRecorderWidget::SetEnabled(bool enabled) {
             [this](const IPCDebugger::RequestRecord& record) { emit EntryUpdated(record); });
     } else if (handle) {
         ipc_recorder.UnbindCallback(handle);
+        handle.reset();
     }
+}
+
+void IPCRecorderWidget::SetWorkspaceActive(bool active) {
+    workspace_active = active;
+    SetEnabled(ui->enabled->isChecked());
 }
 
 void IPCRecorderWidget::Clear() {

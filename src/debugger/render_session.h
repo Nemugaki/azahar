@@ -9,16 +9,22 @@
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
 namespace Debugger {
 
+using u8 = std::uint8_t;
 using u32 = std::uint32_t;
 using u64 = std::uint64_t;
 
 enum CaptureCapability : u64 {
     Timeline = 1ULL << 0,
+    RegisterWrites = 1ULL << 1,
+    Resources = 1ULL << 2,
+    Shaders = 1ULL << 3,
 };
 
 struct RenderTarget {
@@ -51,6 +57,79 @@ struct TimelineEntry {
     DrawInfo draw_info{};
 };
 
+enum class ResourceRole : u32 {
+    ColorTarget,
+    DepthTarget,
+    IndexBuffer,
+    VertexBuffer,
+    Texture,
+    Other,
+};
+
+struct ResourceView {
+    ResourceRole role{ResourceRole::Other};
+    u32 slot{};
+    u64 address{};
+    u32 format{};
+    u32 width{};
+    u32 height{};
+    u32 stride{};
+    std::span<const u8> bytes;
+};
+
+struct Resource {
+    u64 id{};
+    ResourceRole role{ResourceRole::Other};
+    u64 address{};
+    u32 format{};
+    u32 width{};
+    u32 height{};
+    u32 stride{};
+    std::vector<u8> bytes;
+};
+
+struct ResourceReference {
+    ResourceRole role{ResourceRole::Other};
+    u32 slot{};
+    u64 resource_id{};
+};
+
+struct RegisterWrite {
+    u32 bank{};
+    u32 index{};
+    u32 value{};
+    u32 mask{};
+};
+
+struct Shader {
+    u64 id{};
+    u32 stage{};
+    u32 entry_point{};
+    std::vector<u32> code;
+    std::vector<u32> metadata;
+    std::vector<u8> state;
+};
+
+struct DrawCapture {
+    TimelineEntry timeline{};
+    u32 write_begin{};
+    u32 write_count{};
+    u64 shader_id{};
+    std::vector<ResourceReference> resources;
+};
+
+struct DrawDetails {
+    u32 write_count{};
+    u64 shader_id{};
+    u32 resource_count{};
+};
+
+struct CaptureStatus {
+    u64 capabilities{};
+    bool complete{};
+    bool truncated{};
+};
+
 struct TimelinePosition {
     u32 frame{};
     u32 draw{};
@@ -81,12 +160,22 @@ struct Capture {
     bool complete{true};
     bool truncated{};
     std::string gap_reason;
+    u64 owned_bytes{};
     std::vector<TimelineEntry> timeline;
+    std::vector<RegisterWrite> writes;
+    std::vector<DrawCapture> draws;
+    std::vector<Shader> shaders;
+    std::vector<Resource> resources;
 };
 
 struct CaptureLimits {
     u64 total_bytes{1ULL << 30};
     std::size_t timeline_entries{1'000'000};
+    std::size_t register_writes{1U << 20};
+    std::size_t draws{1U << 16};
+    std::size_t shaders{1U << 16};
+    std::size_t resources{1U << 16};
+    u64 owned_bytes{1ULL << 30};
 };
 
 /// Thread-safe, bounded render metadata shared by live producers and debugger clients.
@@ -98,16 +187,33 @@ public:
     void SetRenderTarget(RenderTarget target);
     RenderTarget GetRenderTarget() const;
     void RecordDraw(const DrawInfo& info);
+    void RecordDraw(const DrawInfo& info, const Shader& shader,
+                    std::span<const ResourceView> resources);
+    void RecordOutput(const ResourceView& output);
+    void RecordRegisterWrite(RegisterWrite write);
     void RecordFrame();
     std::vector<TimelineEntry> Query(const TimelineQuery& query) const;
     TimelineStatus GetStatus() const;
     TimelinePosition GetPosition() const;
     void Clear();
     void SetFrameLimit(u32 frame_limit);
+    void SetCaptureLimits(CaptureLimits limits);
+    void SetCaptureEnabled(bool enabled);
+    bool IsCaptureEnabled() const;
+    void SetOutputCaptureEnabled(bool enabled);
+    bool IsOutputCaptureEnabled() const;
     bool Replace(std::vector<TimelineEntry> entries, bool was_truncated);
+    bool Replace(Capture capture);
+    void Snapshot(Capture& capture) const;
+    CaptureStatus GetCaptureStatus() const;
+    std::optional<DrawDetails> GetDrawDetails(u32 sequence) const;
+    std::optional<Resource> GetDrawOutput(u32 sequence) const;
 
 private:
-    void Record(TimelineKind kind, const DrawInfo& info);
+    TimelineEntry Record(TimelineKind kind, const DrawInfo& info);
+    u64 StoreResource(const ResourceView& view);
+    void ClearRichCapture(const char* reason);
+    void PruneRichCapture();
     void TrimFrames();
 
     mutable std::mutex mutex;
@@ -119,6 +225,18 @@ private:
     u32 draw_index{};
     u32 frame_limit{8};
     bool truncated{};
+    CaptureLimits capture_limits;
+    u32 draw_write_begin{};
+    bool rich_truncated{};
+    bool capture_enabled{true};
+    bool output_capture_enabled{};
+    std::string rich_gap_reason;
+    u64 capture_capabilities{CaptureCapability::Timeline};
+    u64 owned_bytes{};
+    std::vector<RegisterWrite> writes;
+    std::vector<DrawCapture> draws;
+    std::vector<Shader> shaders;
+    std::vector<Resource> resources;
 };
 
 struct SessionDescriptor {
@@ -151,7 +269,6 @@ private:
     struct StoredSession {
         SessionDescriptor descriptor;
         std::shared_ptr<RenderSession> session;
-        std::string gap_reason;
     };
 
     mutable std::mutex sessions_mutex;

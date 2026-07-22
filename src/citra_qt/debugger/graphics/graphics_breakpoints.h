@@ -43,7 +43,6 @@ signals:
 
 private:
     void OnBreakPointHit(Pica::DebugContext::Event event, const void* data);
-    void OnItemDoubleClicked(const QModelIndex&);
     void OnResumeRequested();
     void OnResumed();
     void LoadCondition(const QModelIndex& index);

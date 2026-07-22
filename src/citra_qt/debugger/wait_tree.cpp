@@ -3,8 +3,8 @@
 // Refer to the license.txt file included.
 
 #include <array>
-#include "citra_qt/debugger/wait_tree.h"
 #include "citra_qt/debugger/dock_workspace.h"
+#include "citra_qt/debugger/wait_tree.h"
 #include "citra_qt/uisettings.h"
 #include "common/assert.h"
 #include "core/hle/kernel/event.h"
@@ -450,7 +450,7 @@ WaitTreeWidget::WaitTreeWidget(Core::System& system_, QWidget* parent)
 }
 
 void WaitTreeWidget::OnDebugModeEntered() {
-    if (!system.IsPoweredOn()) {
+    if (!system.IsPoweredOn() || !Debugger::IsDockUserEnabled(this)) {
         return;
     }
     model->InitItems(system);

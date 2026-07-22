@@ -493,7 +493,7 @@ void GRenderWindow::OnFramebufferSizeChanged() {
     const qreal pixel_ratio = windowPixelRatio();
     const u32 width = static_cast<u32>(this->width() * pixel_ratio);
     const u32 height = static_cast<u32>(this->height() * pixel_ratio);
-    UpdateCurrentFramebufferLayout(width, height);
+    UpdateCurrentFramebufferLayout(width, height, false, isWindow());
 }
 
 void GRenderWindow::BackupGeometry() {
@@ -743,7 +743,16 @@ void GRenderWindow::CaptureScreenshot(u32 res_scale, const QString& screenshot_p
 }
 
 void GRenderWindow::OnMinimalClientAreaChangeRequest(std::pair<u32, u32> minimal_size) {
-    setMinimumSize(minimal_size.first, minimal_size.second);
+    if (isWindow()) {
+        setMinimumSize(minimal_size.first, minimal_size.second);
+    } else {
+        setMinimumSize(1, 1);
+    }
+}
+
+void GRenderWindow::UpdateMinimumSizeForWindowMode() {
+    OnMinimalClientAreaChangeRequest(GetActiveConfig().min_client_area_size);
+    OnFramebufferSizeChanged();
 }
 
 #ifdef ENABLE_OPENGL

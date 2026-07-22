@@ -482,6 +482,9 @@ GraphicsVertexShaderWidget::GraphicsVertexShaderWidget(
 
 void GraphicsVertexShaderWidget::OnBreakPointHit(Pica::DebugContext::Event event,
                                                  const void* data) {
+    if (!Debugger::IsDockUserEnabled(this)) {
+        return;
+    }
     if (event != Pica::DebugContext::Event::VertexShaderInvocation) {
         Debugger::SetDockAvailable(this, false);
         return;

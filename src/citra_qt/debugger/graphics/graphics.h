@@ -51,4 +51,5 @@ protected:
 private:
     Core::System& system;
     GPUCommandStreamItemModel model;
+    bool registered{};
 };

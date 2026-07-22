@@ -568,6 +568,34 @@ void GMainWindow::InitializeWidgets() {
     secondary_window->hide();
     secondary_window->setParent(nullptr);
 
+    game_dock_widget = new QDockWidget(tr("Game"), this);
+    game_dock_widget->setObjectName(QStringLiteral("Game"));
+    game_dock_widget->setAllowedAreas(Qt::AllDockWidgetAreas);
+    game_dock_widget->setFeatures(QDockWidget::DockWidgetClosable | QDockWidget::DockWidgetMovable |
+                                  QDockWidget::DockWidgetFloatable);
+    game_dock_widget->setWidget(render_window);
+    addDockWidget(Qt::RightDockWidgetArea, game_dock_widget);
+    game_dock_widget->hide();
+
+    auto* show_game = new QAction(tr("Game"), this);
+    ui->menu_View->insertAction(ui->action_Fullscreen, show_game);
+    connect(show_game, &QAction::triggered, this, [this] {
+        if (ui->action_Single_Window_Mode->isChecked()) {
+            game_dock_widget->show();
+            game_dock_widget->raise();
+            if (emulation_running) {
+                ui->centralwidget->hide();
+            }
+            if (game_dock_widget->isFloating()) {
+                game_dock_widget->activateWindow();
+            }
+        } else if (emulation_running) {
+            render_window->show();
+            render_window->raise();
+            render_window->activateWindow();
+        }
+    });
+
     game_list = new GameList(*play_time_manager, this);
     ui->horizontalLayout->addWidget(game_list);
 
@@ -581,7 +609,13 @@ void GMainWindow::InitializeWidgets() {
     connect(loading_screen, &LoadingScreen::Hidden, this, [&] {
         loading_screen->Clear();
         if (emulation_running) {
-            render_window->show();
+            if (ui->action_Single_Window_Mode->isChecked()) {
+                ui->centralwidget->hide();
+                game_dock_widget->show();
+                game_dock_widget->raise();
+            } else {
+                render_window->show();
+            }
             render_window->setFocus();
             render_window->activateWindow();
         }
@@ -731,7 +765,15 @@ void GMainWindow::InitializeDebugWidgets() {
         addDockWidget(area, dock);
         Debugger::ConfigureDockWorkspace(dock);
         dock->hide();
-        debug_menu->addAction(dock->toggleViewAction());
+        auto* spawn = debug_menu->addAction(dock->windowTitle());
+        spawn->setIcon(dock->toggleViewAction()->icon());
+        connect(spawn, &QAction::triggered, dock, [dock] {
+            dock->show();
+            dock->raise();
+            if (dock->isFloating()) {
+                dock->activateWindow();
+            }
+        });
     };
 
 #if MICROPROFILE_ENABLED
@@ -750,6 +792,13 @@ void GMainWindow::InitializeDebugWidgets() {
     if (Pica::g_debug_context) {
         graphicsWidget = new GPUCommandStreamWidget(system, this);
         add_debug_dock(Qt::RightDockWidgetArea, graphicsWidget);
+        Debugger::SetDockActiveHandler(graphicsWidget, [this](bool active) {
+            if (active && system.IsPoweredOn() && graphicsWidget->isVisible()) {
+                graphicsWidget->Register();
+            } else {
+                graphicsWidget->Unregister();
+            }
+        });
 
         graphicsCommandsWidget = new GPUCommandListWidget(system, this);
         add_debug_dock(Qt::RightDockWidgetArea, graphicsCommandsWidget);
@@ -759,10 +808,12 @@ void GMainWindow::InitializeDebugWidgets() {
         add_debug_dock(Qt::RightDockWidgetArea, graphicsBreakpointsWidget);
         connect(graphicsBreakpointsWidget, &GraphicsBreakPointsWidget::FrameAdvanceRequested, this,
                 [this] { AdvanceFrame(); });
-        connect(graphicsBreakpointsWidget, &GraphicsBreakPointsWidget::BreakPointHit, this,
-                [this] { UpdateMenuState(); }, Qt::QueuedConnection);
-        connect(graphicsBreakpointsWidget, &GraphicsBreakPointsWidget::Resumed, this,
-                [this] { UpdateMenuState(); }, Qt::QueuedConnection);
+        connect(
+            graphicsBreakpointsWidget, &GraphicsBreakPointsWidget::BreakPointHit, this,
+            [this] { UpdateMenuState(); }, Qt::QueuedConnection);
+        connect(
+            graphicsBreakpointsWidget, &GraphicsBreakPointsWidget::Resumed, this,
+            [this] { UpdateMenuState(); }, Qt::QueuedConnection);
 
         graphicsVertexShaderWidget =
             new GraphicsVertexShaderWidget(system, Pica::g_debug_context, this);
@@ -792,6 +843,8 @@ void GMainWindow::InitializeDebugWidgets() {
 
     ipcRecorderWidget = new IPCRecorderWidget(system, this);
     add_debug_dock(Qt::RightDockWidgetArea, ipcRecorderWidget);
+    Debugger::SetDockActiveHandler(
+        ipcRecorderWidget, [this](bool active) { ipcRecorderWidget->SetWorkspaceActive(active); });
     connect(this, &GMainWindow::EmulationStarting, ipcRecorderWidget,
             &IPCRecorderWidget::OnEmulationStarting);
 }
@@ -1211,9 +1264,7 @@ void GMainWindow::ConnectMenuEvents() {
             system.SetDebugState(Core::DebugPauseReason::CPU);
         }
     });
-    connect_menu(ui->action_Debug_Resume, [this] {
-        ResumeEmulation();
-    });
+    connect_menu(ui->action_Debug_Resume, [this] { ResumeEmulation(); });
     connect_menu(ui->action_Debug_Step, [this] {
         if (emu_thread) {
             emu_thread->ExecStep();
@@ -1272,6 +1323,21 @@ void GMainWindow::UpdateMenuState() {
 void GMainWindow::OnDisplayTitleBars(bool show) {
     QList<QDockWidget*> widgets = findChildren<QDockWidget*>();
 
+    for (QDockWidget* widget : widgets) {
+        if (!widget->property("titleBarWorkspaceConnected").toBool()) {
+            widget->setProperty("titleBarWorkspaceConnected", true);
+            connect(widget, &QDockWidget::topLevelChanged, this, [this, widget](bool floating) {
+                if (floating) {
+                    QWidget* old = widget->titleBarWidget();
+                    widget->setTitleBarWidget(nullptr);
+                    delete old;
+                } else {
+                    OnDisplayTitleBars(ui->action_Display_Dock_Widget_Headers->isChecked());
+                }
+            });
+        }
+    }
+
     if (show) {
         for (QDockWidget* widget : widgets) {
             QWidget* old = widget->titleBarWidget();
@@ -1282,6 +1348,9 @@ void GMainWindow::OnDisplayTitleBars(bool show) {
         }
     } else {
         for (QDockWidget* widget : widgets) {
+            if (widget->isFloating()) {
+                continue;
+            }
             QWidget* old = widget->titleBarWidget();
             widget->setTitleBarWidget(new QWidget());
             if (old) {
@@ -1688,9 +1757,11 @@ void GMainWindow::ShutdownGame() {
     disconnect(secondary_window, &GRenderWindow::Closed, this, &GMainWindow::OnStopGame);
 
     render_window->hide();
+    game_dock_widget->hide();
     secondary_window->hide();
     loading_screen->hide();
     loading_screen->Clear();
+    ui->centralwidget->show();
 
     if (game_list->IsEmpty()) {
         game_list_placeholder->show();
@@ -2682,8 +2753,7 @@ bool GMainWindow::AdvanceFrame() {
     if (reason == Core::DebugPauseReason::CPU) {
         emu_thread->SetRunning(true);
     }
-    if (reason == Core::DebugPauseReason::User ||
-        reason == Core::DebugPauseReason::FrameAdvance) {
+    if (reason == Core::DebugPauseReason::User || reason == Core::DebugPauseReason::FrameAdvance) {
         system.frame_limiter.AdvanceFrame();
     }
     system.SetDebugState(Core::DebugPauseReason::FrameAdvance);
@@ -2704,7 +2774,7 @@ Core::DebugPauseReason GMainWindow::PauseReason() const {
     if (system.frame_limiter.IsFrameAdvancing()) {
         const auto reason = system.GetDebugState().reason;
         return reason == Core::DebugPauseReason::User ? reason
-                                                       : Core::DebugPauseReason::FrameAdvance;
+                                                      : Core::DebugPauseReason::FrameAdvance;
     }
     return Core::DebugPauseReason::Running;
 }
@@ -2834,18 +2904,33 @@ void GMainWindow::ToggleWindowMode() {
     if (ui->action_Single_Window_Mode->isChecked()) {
         // Render in the main window...
         UISettings::values.renderwindow_geometry = render_window->saveGeometry();
-        ui->horizontalLayout->addWidget(render_window);
+        if (game_dock_widget->widget() != render_window) {
+            game_dock_widget->setWidget(render_window);
+        }
+        render_window->UpdateMinimumSizeForWindowMode();
         render_window->setFocusPolicy(Qt::StrongFocus);
         if (emulation_running) {
-            render_window->setVisible(true);
-            render_window->setFocus();
+            if (loading_screen->isVisible()) {
+                ui->centralwidget->show();
+                game_dock_widget->hide();
+            } else {
+                ui->centralwidget->hide();
+                game_dock_widget->show();
+                render_window->setFocus();
+            }
             game_list->hide();
+        } else {
+            game_dock_widget->hide();
+            ui->centralwidget->show();
         }
 
     } else {
         // Render in a separate window...
-        ui->horizontalLayout->removeWidget(render_window);
         render_window->setParent(nullptr);
+        game_dock_widget->setWidget(nullptr);
+        render_window->UpdateMinimumSizeForWindowMode();
+        game_dock_widget->hide();
+        ui->centralwidget->show();
         if (emulation_running) {
             render_window->setVisible(true);
             render_window->restoreGeometry(UISettings::values.renderwindow_geometry);

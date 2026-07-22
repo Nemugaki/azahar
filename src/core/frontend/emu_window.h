@@ -251,8 +251,8 @@ public:
      * Convenience method to update the current frame layout
      * Read from the current settings to determine which layout to use.
      */
-    void UpdateCurrentFramebufferLayout(unsigned width, unsigned height,
-                                        bool is_portrait_mode = {});
+    void UpdateCurrentFramebufferLayout(unsigned width, unsigned height, bool is_portrait_mode = {},
+                                        bool enforce_minimum = true);
 
     std::unique_ptr<TextureMailbox> mailbox = nullptr;
     bool isSecondary() const {

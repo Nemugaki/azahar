@@ -51,5 +51,4 @@ private:
     bool stopping{};
     bool listening{};
     u64 request_count{};
-    u32 active_client_count{};
 };

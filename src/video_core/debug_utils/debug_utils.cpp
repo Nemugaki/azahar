@@ -28,6 +28,13 @@ using nihstro::DVLPHeader;
 
 namespace Pica {
 
+DebugContext::DebugContext() : render_sessions{std::make_shared<Debugger::RenderSessionManager>()} {
+    Debugger::CaptureLimits limits;
+    limits.total_bytes = static_cast<u64>(Settings::values.debugger_cache_mb.GetValue()) << 20;
+    limits.owned_bytes = limits.total_bytes;
+    GetRenderSession()->SetCaptureLimits(limits);
+}
+
 void DebugContext::DoOnEvent(Event event, const void* data) {
     std::unique_lock observer_lock{observer_mutex};
     {
@@ -62,8 +69,24 @@ void DebugContext::DoOnEvent(Event event, const void* data) {
 }
 
 void DebugContext::OnDraw(const Debugger::DrawInfo& info) {
-    GetRenderSession()->RecordDraw(info);
+    if (auto session = GetRenderSession(); session->IsCaptureEnabled()) {
+        session->RecordDraw(info);
+    }
     OnEvent(Event::IncomingPrimitiveBatch, &info);
+}
+
+void DebugContext::OnDraw(const Debugger::DrawInfo& info, const Debugger::Shader& shader,
+                          std::span<const Debugger::ResourceView> resources) {
+    if (auto session = GetRenderSession(); session->IsCaptureEnabled()) {
+        session->RecordDraw(info, shader, resources);
+    }
+    OnEvent(Event::IncomingPrimitiveBatch, &info);
+}
+
+void DebugContext::OnRegisterWrite(Debugger::RegisterWrite write) {
+    if (auto session = GetRenderSession(); session->IsCaptureEnabled()) {
+        session->RecordRegisterWrite(write);
+    }
 }
 
 void DebugContext::Resume() {
@@ -92,7 +115,12 @@ void DebugContext::ResumeUntilFrame() {
 
 void DebugContext::OnFrameBoundary() {
     ignore_breakpoints_until_frame = false;
-    GetRenderSession()->RecordFrame();
+    auto session = GetRenderSession();
+    Debugger::CaptureLimits limits;
+    limits.total_bytes = static_cast<u64>(Settings::values.debugger_cache_mb.GetValue()) << 20;
+    limits.owned_bytes = limits.total_bytes;
+    session->SetCaptureLimits(limits);
+    session->RecordFrame();
 }
 
 void DebugContext::SetBreakpointCondition(Event event, BreakPointCondition condition) {
@@ -129,8 +157,7 @@ bool DebugContext::MatchesCondition(Event event, const void* data) {
     const auto position = session->GetPosition();
     switch (condition.field) {
     case ConditionField::EventData:
-        if (!data ||
-            (event != Event::PicaCommandLoaded && event != Event::PicaCommandProcessed)) {
+        if (!data || (event != Event::PicaCommandLoaded && event != Event::PicaCommandProcessed)) {
             return false;
         }
         std::memcpy(&actual, data, sizeof(actual));
@@ -409,6 +436,9 @@ void StartPicaTracing() {
 }
 
 void OnPicaRegWrite(u16 cmd_id, u16 mask, u32 value) {
+    if (g_debug_context) {
+        g_debug_context->OnRegisterWrite({0, cmd_id, value, mask});
+    }
     if (!g_is_pica_tracing) [[likely]]
         return;
 

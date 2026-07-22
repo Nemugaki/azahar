@@ -32,15 +32,12 @@ u16 GetRPCPort() {
 
 class UDPServer::Impl {
 public:
-    Impl(std::function<void(std::unique_ptr<Packet>)> new_request_callback,
-         ClientCountHandler client_count_handler_)
+    explicit Impl(std::function<void(std::unique_ptr<Packet>)> new_request_callback)
         : socket(io_context, boost::asio::ip::udp::endpoint(boost::asio::ip::address_v4::loopback(),
                                                             GetRPCPort())),
-          client_timer(io_context), new_request_callback(std::move(new_request_callback)),
-          client_count_handler(std::move(client_count_handler_)) {
+          new_request_callback(std::move(new_request_callback)) {
 
         StartReceive();
-        StartClientTimer();
         worker_thread = std::thread([this] { io_context.run(); });
     }
 
@@ -64,7 +61,6 @@ private:
             PacketHeader header;
             std::memcpy(&header, request_buffer.data(), sizeof(header));
             if ((size - MIN_PACKET_SIZE) == header.packet_size) {
-                TouchClient(remote_endpoint);
                 if (SendCachedReply(header, remote_endpoint)) {
                     StartReceive();
                     return;
@@ -84,45 +80,6 @@ private:
         StartReceive();
     }
 
-    void TouchClient(const boost::asio::ip::udp::endpoint& endpoint) {
-        const auto now = std::chrono::steady_clock::now();
-        PruneClients(now);
-        const auto client = std::ranges::find_if(
-            clients, [&endpoint](const auto& entry) { return entry.endpoint == endpoint; });
-        if (client == clients.end()) {
-            clients.push_back({endpoint, now});
-            NotifyClientCount();
-        } else {
-            client->last_seen = now;
-        }
-    }
-
-    void StartClientTimer() {
-        client_timer.expires_after(std::chrono::seconds(1));
-        client_timer.async_wait([this](const boost::system::error_code& error) {
-            if (!error) {
-                PruneClients(std::chrono::steady_clock::now());
-                StartClientTimer();
-            }
-        });
-    }
-
-    void PruneClients(std::chrono::steady_clock::time_point now) {
-        const auto old_size = clients.size();
-        std::erase_if(clients, [now](const auto& client) {
-            return now - client.last_seen >= std::chrono::seconds(10);
-        });
-        if (clients.size() != old_size) {
-            NotifyClientCount();
-        }
-    }
-
-    void NotifyClientCount() {
-        if (client_count_handler) {
-            client_count_handler(static_cast<u32>(clients.size()));
-        }
-    }
-
     void SendReply(boost::asio::ip::udp::endpoint endpoint, Packet& reply_packet) {
         std::vector<u8> reply_buffer(MIN_PACKET_SIZE + reply_packet.GetPacketDataSize());
         auto reply_header = reply_packet.GetHeader();
@@ -135,8 +92,8 @@ private:
             std::lock_guard lock{reply_cache_mutex};
             const auto now = std::chrono::steady_clock::now();
             while (!reply_cache.empty() &&
-                   (reply_cache.size() >= 128 || now - reply_cache.front().created >=
-                                                   std::chrono::seconds(10))) {
+                   (reply_cache.size() >= 128 ||
+                    now - reply_cache.front().created >= std::chrono::seconds(10))) {
                 reply_cache.pop_front();
             }
             reply_cache.push_back({endpoint, reply_header, reply_buffer, now});
@@ -173,17 +130,10 @@ private:
 
     boost::asio::io_context io_context;
     boost::asio::ip::udp::socket socket;
-    boost::asio::steady_timer client_timer;
     std::array<u8, MAX_PACKET_SIZE> request_buffer;
     boost::asio::ip::udp::endpoint remote_endpoint;
 
     std::function<void(std::unique_ptr<Packet>)> new_request_callback;
-    ClientCountHandler client_count_handler;
-    struct Client {
-        boost::asio::ip::udp::endpoint endpoint;
-        std::chrono::steady_clock::time_point last_seen;
-    };
-    std::vector<Client> clients;
     struct CachedReply {
         boost::asio::ip::udp::endpoint endpoint;
         PacketHeader header;
@@ -194,10 +144,8 @@ private:
     std::deque<CachedReply> reply_cache;
 };
 
-UDPServer::UDPServer(std::function<void(std::unique_ptr<Packet>)> new_request_callback,
-                     ClientCountHandler client_count_handler)
-    : impl(std::make_unique<Impl>(std::move(new_request_callback),
-                                  std::move(client_count_handler))) {}
+UDPServer::UDPServer(std::function<void(std::unique_ptr<Packet>)> new_request_callback)
+    : impl(std::make_unique<Impl>(std::move(new_request_callback))) {}
 
 UDPServer::~UDPServer() = default;
 

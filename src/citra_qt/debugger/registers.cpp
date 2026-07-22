@@ -74,6 +74,9 @@ RegistersWidget::RegistersWidget(Core::System& system_, QWidget* parent)
 RegistersWidget::~RegistersWidget() = default;
 
 void RegistersWidget::OnDebugModeEntered() {
+    if (!Debugger::IsDockActive(this)) {
+        return;
+    }
     RefreshRegisters(true);
 }
 
@@ -85,10 +88,10 @@ void RegistersWidget::RefreshRegisters(bool capture) {
     if (capture) {
         previous_capture_id = current_capture_id;
         current_capture_id = system.CreateDebugCapture().id;
-        capture_status->setText(current_capture_id
-                                    ? tr("Capture %1; changed values show their previous value")
-                                          .arg(current_capture_id)
-                                    : tr("CPU state is not paused consistently enough to capture"));
+        capture_status->setText(
+            current_capture_id
+                ? tr("Capture %1; changed values show their previous value").arg(current_capture_id)
+                : tr("CPU state is not paused consistently enough to capture"));
     }
 
     if (!current_capture_id) {
@@ -99,12 +102,11 @@ void RegistersWidget::RefreshRegisters(bool capture) {
     if (core >= system.GetNumCores()) {
         return;
     }
-    const auto snapshot = current_capture_id ? system.GetDebugCaptureCore(current_capture_id, core)
-                                             : std::nullopt;
+    const auto snapshot =
+        current_capture_id ? system.GetDebugCaptureCore(current_capture_id, core) : std::nullopt;
     const auto current = snapshot.value_or(system.GetCore(core).GetRegisterSnapshot());
-    const auto previous = previous_capture_id
-                              ? system.GetDebugCaptureCore(previous_capture_id, core)
-                              : std::nullopt;
+    const auto previous =
+        previous_capture_id ? system.GetDebugCaptureCore(previous_capture_id, core) : std::nullopt;
     const auto show_change = [](QTreeWidgetItem* item, u32 value, std::optional<u32> old_value) {
         const bool changed = old_value && *old_value != value;
         item->setText(2, changed ? QStringLiteral("0x%1").arg(*old_value, 8, 16, QLatin1Char('0'))
@@ -113,9 +115,8 @@ void RegistersWidget::RefreshRegisters(bool capture) {
                                     : QString{});
         item->setBackground(1, changed ? QApplication::palette().brush(QPalette::Highlight)
                                        : QBrush{});
-        item->setForeground(1, changed
-                                   ? QApplication::palette().brush(QPalette::HighlightedText)
-                                   : QBrush{});
+        item->setForeground(1, changed ? QApplication::palette().brush(QPalette::HighlightedText)
+                                       : QBrush{});
     };
     for (int i = 0; i < core_registers->childCount(); ++i) {
         core_registers->child(i)->setText(
@@ -132,8 +133,7 @@ void RegistersWidget::RefreshRegisters(bool capture) {
     }
 
     UpdateCPSRValues(current.cpsr);
-    show_change(cpsr, current.cpsr,
-                previous ? std::optional<u32>{previous->cpsr} : std::nullopt);
+    show_change(cpsr, current.cpsr, previous ? std::optional<u32>{previous->cpsr} : std::nullopt);
     UpdateVFPSystemRegisterValues(current.fpscr, current.fpexc);
     show_change(vfp_system_registers->child(0), current.fpscr,
                 previous ? std::optional<u32>{previous->fpscr} : std::nullopt);

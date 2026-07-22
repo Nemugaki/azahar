@@ -13,8 +13,8 @@
 #include "citra_qt/rpc_controller.h"
 #include "citra_qt/uisettings.h"
 #include "core/core.h"
-#include "core/savestate.h"
 #include "core/rpc/udp_server.h"
+#include "core/savestate.h"
 #include "video_core/debug_utils/debug_utils.h"
 
 RPCController::RPCController(GMainWindow& main_window_, Core::System& system_)
@@ -27,15 +27,6 @@ RPCController::RPCController(GMainWindow& main_window_, Core::System& system_)
     listening = system.StartRPCServer(
         [this](Core::RPC::EmulationControl operation, const std::string& path) {
             return HandleEmulationControl(operation, path);
-        },
-        [this](u32 count) {
-            QMetaObject::invokeMethod(
-                this,
-                [this, count] {
-                    active_client_count = count;
-                    UpdateIndicator();
-                },
-                Qt::QueuedConnection);
         });
     UpdateIndicator();
 }
@@ -227,17 +218,15 @@ void RPCController::DrainRequests() {
 }
 
 void RPCController::UpdateIndicator() {
-    indicator->setText(listening ? tr("RPC: Listening at %1 | %2 active")
+    indicator->setText(listening ? tr("RPC: Listening at %1 | %2 requests")
                                        .arg(Core::RPC::GetRPCPort())
-                                       .arg(active_client_count)
-                                 : tr("RPC: Failed to listen at %1")
-                                       .arg(Core::RPC::GetRPCPort()));
+                                       .arg(request_count)
+                                 : tr("RPC: Failed to listen at %1").arg(Core::RPC::GetRPCPort()));
     indicator->setToolTip(
-        listening
-            ? tr("RPC server on 127.0.0.1:%1 (loopback only)\n%2 clients active in the last 10 seconds\n%3 frontend requests handled")
-                  .arg(Core::RPC::GetRPCPort())
-                  .arg(active_client_count)
-                  .arg(request_count)
-            : tr("Could not bind the loopback RPC server to port %1. Another process may be using it.")
-                  .arg(Core::RPC::GetRPCPort()));
+        listening ? tr("RPC server on 127.0.0.1:%1 (loopback only)\n%2 frontend requests handled")
+                        .arg(Core::RPC::GetRPCPort())
+                        .arg(request_count)
+                  : tr("Could not bind the loopback RPC server to port %1. Another process may be "
+                       "using it.")
+                        .arg(Core::RPC::GetRPCPort()));
 }

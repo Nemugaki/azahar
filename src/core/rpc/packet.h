@@ -268,7 +268,6 @@ struct EmulationControlReply {
 
 using EmulationControlHandler =
     std::function<EmulationControlReply(EmulationControl, const std::string&)>;
-using ClientCountHandler = std::function<void(u32)>;
 
 struct PacketHeader {
     u32 version;

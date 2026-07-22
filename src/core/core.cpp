@@ -56,8 +56,8 @@
 #endif
 #include "network/network.h"
 #include "video_core/custom_textures/custom_tex_manager.h"
-#include "video_core/gpu.h"
 #include "video_core/debug_utils/debug_utils.h"
+#include "video_core/gpu.h"
 #include "video_core/pica/pica_core.h"
 #include "video_core/renderer_base.h"
 
@@ -100,8 +100,7 @@ DebugState System::GetDebugState() const {
     return debug_state;
 }
 
-DebugState System::WaitForDebugState(u32 after_generation, u32 timeout_ms,
-                                     u32 reason_mask) const {
+DebugState System::WaitForDebugState(u32 after_generation, u32 timeout_ms, u32 reason_mask) const {
     std::unique_lock lock{debug_mutex};
     const auto matches = [&] {
         const u32 reason = static_cast<u32>(debug_state.reason);
@@ -118,12 +117,11 @@ DebugCaptureInfo System::CreateDebugCapture() {
         !IsPoweredOn()) {
         return {};
     }
-    const bool stable = before.reason == DebugPauseReason::CPU
-                            ? IsCPUHalted()
-                        : before.reason == DebugPauseReason::Pica
-                            ? Pica::g_debug_context &&
-                                  Pica::g_debug_context->GetBreakpointState().at_breakpoint
-                            : frame_limiter.IsWaitingForFrameAdvance();
+    const bool stable =
+        before.reason == DebugPauseReason::CPU ? IsCPUHalted()
+        : before.reason == DebugPauseReason::Pica
+            ? Pica::g_debug_context && Pica::g_debug_context->GetBreakpointState().at_breakpoint
+            : frame_limiter.IsWaitingForFrameAdvance();
     if (!stable) {
         return {};
     }
@@ -216,9 +214,8 @@ DebugCaptureInfo System::GetDebugCaptureInfo(u32 id) const {
         return {capture.header.id, static_cast<u32>(capture.data.size()), capture.header.reason,
                 capture.header.detail, capture.pinned};
     }
-    const auto capture = std::ranges::find_if(debug_captures, [id](const auto& entry) {
-        return entry.header.id == id;
-    });
+    const auto capture = std::ranges::find_if(
+        debug_captures, [id](const auto& entry) { return entry.header.id == id; });
     if (capture == debug_captures.end()) {
         return {};
     }
@@ -277,8 +274,8 @@ u32 System::ReadDebugCapture(u32 id, u32 offset, std::span<u8> output) const {
     if (capture == debug_captures.end() || offset >= capture->data.size()) {
         return 0;
     }
-    const u32 size = std::min(static_cast<u32>(output.size()),
-                              static_cast<u32>(capture->data.size() - offset));
+    const u32 size =
+        std::min(static_cast<u32>(output.size()), static_cast<u32>(capture->data.size() - offset));
     std::memcpy(output.data(), capture->data.data() + offset, size);
     return size;
 }
@@ -287,8 +284,8 @@ std::vector<DebugCaptureDiff> System::DiffDebugCaptures(u32 before_id, u32 after
                                                         u32 count) const {
     std::lock_guard lock{debug_mutex};
     const auto find = [this](u32 id) {
-        return std::ranges::find_if(
-            debug_captures, [id](const auto& entry) { return entry.header.id == id; });
+        return std::ranges::find_if(debug_captures,
+                                    [id](const auto& entry) { return entry.header.id == id; });
     };
     const auto before = find(before_id);
     const auto after = find(after_id);
@@ -324,8 +321,8 @@ std::optional<ARM_Interface::RegisterSnapshot> System::GetDebugCaptureCore(u32 i
     if (capture == debug_captures.end() || core >= capture->header.core_count) {
         return std::nullopt;
     }
-    const std::size_t offset = sizeof(DebugCaptureHeader) +
-                               core * sizeof(ARM_Interface::RegisterSnapshot);
+    const std::size_t offset =
+        sizeof(DebugCaptureHeader) + core * sizeof(ARM_Interface::RegisterSnapshot);
     ARM_Interface::RegisterSnapshot snapshot;
     if (offset + sizeof(snapshot) > capture->data.size()) {
         return std::nullopt;
@@ -335,11 +332,9 @@ std::optional<ARM_Interface::RegisterSnapshot> System::GetDebugCaptureCore(u32 i
 }
 
 #ifdef ENABLE_SCRIPTING
-bool System::StartRPCServer(RPC::EmulationControlHandler emulation_control_handler,
-                            RPC::ClientCountHandler client_count_handler) {
+bool System::StartRPCServer(RPC::EmulationControlHandler emulation_control_handler) {
     if (!rpc_server) {
-        rpc_server = std::make_unique<RPC::Server>(*this, std::move(emulation_control_handler),
-                                                   std::move(client_count_handler));
+        rpc_server = std::make_unique<RPC::Server>(*this, std::move(emulation_control_handler));
     }
     return rpc_server->IsListening();
 }

@@ -7,24 +7,30 @@
 #include <iterator>
 #include <memory>
 #include <QBoxLayout>
-#include <QComboBox>
 #include <QCheckBox>
+#include <QComboBox>
 #include <QFileDialog>
+#include <QFont>
 #include <QHeaderView>
+#include <QImage>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMainWindow>
 #include <QMessageBox>
+#include <QPixmap>
 #include <QPushButton>
+#include <QScrollArea>
 #include <QScrollBar>
 #include <QSignalBlocker>
+#include <QSlider>
 #include <QSpinBox>
-#include <QTreeWidget>
+#include <QSplitter>
 #include <QTimer>
+#include <QTreeWidget>
 #include <nihstro/float24.h>
+#include "citra_qt/debugger/dock_workspace.h"
 #include "citra_qt/debugger/graphics/graphics_surface.h"
 #include "citra_qt/debugger/graphics/graphics_tracing.h"
-#include "citra_qt/debugger/dock_workspace.h"
 #include "common/common_types.h"
 #include "common/settings.h"
 #include "core/core.h"
@@ -32,6 +38,37 @@
 #include "debugger/capture_file.h"
 #include "video_core/gpu.h"
 #include "video_core/pica/pica_core.h"
+#include "video_core/texture/texture_decode.h"
+
+namespace {
+
+QImage DecodeColorTarget(const Debugger::Resource& resource) {
+    if (resource.width == 0 || resource.height == 0 || resource.bytes.empty() ||
+        resource.format > static_cast<u32>(Pica::TexturingRegs::TextureFormat::RGBA4)) {
+        return {};
+    }
+
+    Pica::Texture::TextureInfo info{};
+    info.width = resource.width;
+    info.height = resource.height;
+    info.format = static_cast<Pica::TexturingRegs::TextureFormat>(resource.format);
+    info.SetDefaultStride();
+    const auto rows = (resource.height + 7) / 8;
+    if (info.stride <= 0 || static_cast<u64>(info.stride) * rows > resource.bytes.size()) {
+        return {};
+    }
+
+    QImage image(resource.width, resource.height, QImage::Format_ARGB32);
+    for (u32 y = 0; y < resource.height; ++y) {
+        for (u32 x = 0; x < resource.width; ++x) {
+            const auto color = Pica::Texture::LookupTexture(resource.bytes.data(), x, y, info);
+            image.setPixel(x, y, qRgba(color.r(), color.g(), color.b(), color.a()));
+        }
+    }
+    return image;
+}
+
+} // namespace
 
 GraphicsTracingWidget::GraphicsTracingWidget(Core::System& system_,
                                              std::shared_ptr<Pica::DebugContext> debug_context,
@@ -57,27 +94,47 @@ GraphicsTracingWidget::GraphicsTracingWidget(Core::System& system_,
     frame_limit->setAccessibleName(tr("Maximum retained render timeline frames"));
     frame_limit->setToolTip(
         tr("Keeps metadata for this many recent frames, up to 4096 events. Oldest entries are "
-           "evicted; render-target images are not copied."));
+           "evicted; rich draw data is bounded by the debugger cache limit."));
     follow_live = new QCheckBox(tr("Follow Live"));
     follow_live->setChecked(true);
     freeze_timeline = new QCheckBox(tr("Freeze"));
     freeze_timeline->setToolTip(tr("Stops automatic refresh without pausing emulation."));
     if (render_sessions) {
         render_sessions->GetLive()->SetFrameLimit(frame_limit->value());
+        Debugger::SetDockActiveHandler(this, [this](bool active) {
+            render_sessions->GetLive()->SetCaptureEnabled(active);
+            UpdateOutputCaptureState();
+        });
+        connect(this, &QDockWidget::visibilityChanged, this,
+                [this](bool) { UpdateOutputCaptureState(); });
     }
     timeline = new QTreeWidget;
     timeline->setColumnCount(6);
     timeline->setHeaderLabels(
-        {tr("Call"), tr("Category"), tr("Topology"), tr("Vertices"), tr("Target"),
-         tr("Changed")});
+        {tr("Call"), tr("Category"), tr("Topology"), tr("Vertices"), tr("Target"), tr("Changed")});
     timeline->setEditTriggers(QAbstractItemView::NoEditTriggers);
     timeline->setAlternatingRowColors(true);
     timeline->setAccessibleName(tr("Ordered Pica draw-call timeline"));
     timeline->header()->setStretchLastSection(false);
     timeline->header()->setSectionResizeMode(0, QHeaderView::Stretch);
+    event_slider = new QSlider(Qt::Horizontal);
+    event_slider->setRange(0, 0);
+    event_slider->setEnabled(false);
+    event_slider->setAccessibleName(tr("Selected render event"));
+    event_slider->setToolTip(tr("Scrub through ordered draw events."));
+    event_position = new QLabel(tr("No events"));
+    event_position->setMinimumWidth(fontMetrics().horizontalAdvance(QStringLiteral("9999 / 9999")));
+    event_position->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     timeline_details = new QLabel(tr("Select a draw call to inspect it."));
     timeline_details->setWordWrap(true);
     timeline_details->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    output_preview = new QLabel(tr("Select a draw call to view its captured output."));
+    output_preview->setAlignment(Qt::AlignCenter);
+    output_preview->setMinimumSize(0, 0);
+    output_preview->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
+    output_status = new QLabel;
+    output_status->setWordWrap(true);
+    output_status->setTextInteractionFlags(Qt::TextSelectableByMouse);
     open_color_target = new QPushButton(tr("Open Color Target"));
     open_depth_target = new QPushButton(tr("Open Depth Target"));
     const QString target_help =
@@ -100,13 +157,16 @@ GraphicsTracingWidget::GraphicsTracingWidget(Core::System& system_,
     auto* refresh_timer = new QTimer(this);
     refresh_timer->setInterval(500);
     connect(refresh_timer, &QTimer::timeout, this, [this] {
-        if (follow_live->isChecked() && !freeze_timeline->isChecked()) {
+        if (render_sessions) {
+            UpdateOutputCaptureState();
+        }
+        if (Debugger::IsDockActive(this) && follow_live->isChecked() &&
+            !freeze_timeline->isChecked()) {
             RefreshTimeline();
         }
     });
     refresh_timer->start();
-    connect(timeline_filter, &QLineEdit::textChanged, this,
-            &GraphicsTracingWidget::FilterTimeline);
+    connect(timeline_filter, &QLineEdit::textChanged, this, &GraphicsTracingWidget::FilterTimeline);
     connect(frame_limit, qOverload<int>(&QSpinBox::valueChanged), this, [this](int value) {
         Settings::values.render_debugger_frame_limit = static_cast<u32>(value);
         if (render_sessions) {
@@ -116,11 +176,11 @@ GraphicsTracingWidget::GraphicsTracingWidget(Core::System& system_,
     });
     connect(timeline, &QTreeWidget::currentItemChanged, this,
             [this](QTreeWidgetItem* current, QTreeWidgetItem*) { SelectTimelineEntry(current); });
-    connect(timeline, &QTreeWidget::itemDoubleClicked, this,
-            [this](QTreeWidgetItem* item) {
-                SelectTimelineEntry(item);
-                OpenColorTarget();
-            });
+    connect(event_slider, &QSlider::valueChanged, this, &GraphicsTracingWidget::SelectEvent);
+    connect(timeline, &QTreeWidget::itemDoubleClicked, this, [this](QTreeWidgetItem* item) {
+        SelectTimelineEntry(item);
+        OpenColorTarget();
+    });
     connect(open_color_target, &QPushButton::clicked, this,
             &GraphicsTracingWidget::OpenColorTarget);
     connect(open_depth_target, &QPushButton::clicked, this,
@@ -164,8 +224,7 @@ GraphicsTracingWidget::GraphicsTracingWidget(Core::System& system_,
     connect(session_selector, qOverload<int>(&QComboBox::currentIndexChanged), this,
             [this](int index) {
                 if (index >= 0 && render_sessions) {
-                    render_sessions->Select(
-                        session_selector->itemData(index).toULongLong());
+                    render_sessions->Select(session_selector->itemData(index).toULongLong());
                     remove_capture->setEnabled(render_sessions->GetActiveId() !=
                                                Debugger::RenderSessionManager::LiveSessionId);
                     RefreshTimeline();
@@ -180,26 +239,50 @@ GraphicsTracingWidget::GraphicsTracingWidget(Core::System& system_,
     session_controls->addWidget(export_capture);
     session_controls->addWidget(remove_capture);
     main_layout->addLayout(session_controls);
-    main_layout->addWidget(timeline);
-    main_layout->addWidget(timeline_details);
-    auto* target_controls = new QHBoxLayout;
+    auto* playback_controls = new QHBoxLayout;
     auto* previous_event = new QPushButton(tr("Previous Event"));
     auto* next_event = new QPushButton(tr("Next Event"));
-    connect(previous_event, &QPushButton::clicked, this, [this] {
-        if (auto* item = timeline->itemAbove(timeline->currentItem())) {
-            timeline->setCurrentItem(item);
-        }
-    });
-    connect(next_event, &QPushButton::clicked, this, [this] {
-        if (auto* item = timeline->itemBelow(timeline->currentItem())) {
-            timeline->setCurrentItem(item);
-        }
-    });
-    target_controls->addWidget(previous_event);
-    target_controls->addWidget(next_event);
+    previous_event->setAccessibleName(tr("Previous render event"));
+    next_event->setAccessibleName(tr("Next render event"));
+    connect(previous_event, &QPushButton::clicked, event_slider,
+            [this] { event_slider->setValue(event_slider->value() - 1); });
+    connect(next_event, &QPushButton::clicked, event_slider,
+            [this] { event_slider->setValue(event_slider->value() + 1); });
+    playback_controls->addWidget(previous_event);
+    playback_controls->addWidget(event_slider, 1);
+    playback_controls->addWidget(event_position);
+    playback_controls->addWidget(next_event);
+    main_layout->addLayout(playback_controls);
+
+    auto* inspector = new QWidget;
+    auto* inspector_layout = new QVBoxLayout(inspector);
+    auto* output_title = new QLabel(tr("Output"));
+    QFont output_font = output_title->font();
+    output_font.setBold(true);
+    output_title->setFont(output_font);
+    inspector_layout->addWidget(output_title);
+    auto* output_scroll = new QScrollArea;
+    output_scroll->setWidgetResizable(true);
+    output_scroll->setAlignment(Qt::AlignCenter);
+    output_scroll->setWidget(output_preview);
+    inspector_layout->addWidget(output_scroll, 1);
+    inspector_layout->addWidget(output_status);
+    auto* details_title = new QLabel(tr("Details"));
+    details_title->setFont(output_font);
+    inspector_layout->addWidget(details_title);
+    inspector_layout->addWidget(timeline_details);
+
+    auto* content = new QSplitter(Qt::Horizontal);
+    content->addWidget(timeline);
+    content->addWidget(inspector);
+    content->setStretchFactor(0, 2);
+    content->setStretchFactor(1, 3);
+    content->setChildrenCollapsible(false);
+    main_layout->addWidget(content, 1);
+    auto* target_controls = new QHBoxLayout;
     target_controls->addWidget(open_color_target);
     target_controls->addWidget(open_depth_target);
-    main_layout->addLayout(target_controls);
+    inspector_layout->addLayout(target_controls);
     main_widget->setLayout(main_layout);
     setWidget(main_widget);
     RefreshSessions();
@@ -296,6 +379,9 @@ void GraphicsTracingWidget::AbortRecording() {
 }
 
 void GraphicsTracingWidget::OnBreakPointHit(Pica::DebugContext::Event event, const void* data) {
+    if (!Debugger::IsDockActive(this)) {
+        return;
+    }
     RefreshTimeline();
     recording_controls->setEnabled(true);
 }
@@ -312,12 +398,19 @@ void GraphicsTracingWidget::RefreshTimeline() {
         displayed_status.oldest_sequence == status.oldest_sequence &&
         displayed_status.newest_sequence == status.newest_sequence &&
         displayed_status.truncated == status.truncated) {
+        if (auto* current = timeline->currentItem();
+            current && current->data(0, Qt::UserRole).isValid()) {
+            const int index = current->data(0, Qt::UserRole).toInt();
+            if (index >= 0 && index < static_cast<int>(displayed_entries.size())) {
+                UpdateOutput(displayed_entries[index].sequence);
+            }
+        }
         return;
     }
 
     const auto* current = timeline->currentItem();
     std::optional<u32> selected_sequence;
-    if (current && current->parent()) {
+    if (current && current->data(0, Qt::UserRole).isValid()) {
         const int index = current->data(0, Qt::UserRole).toInt();
         if (index >= 0 && index < static_cast<int>(displayed_entries.size())) {
             selected_sequence = displayed_entries[index].sequence;
@@ -327,14 +420,21 @@ void GraphicsTracingWidget::RefreshTimeline() {
     const int old_scroll = scroll_bar->value();
     const bool was_at_bottom = old_scroll >= scroll_bar->maximum();
 
-    displayed_entries = session->Query(
-        {.start = Debugger::RenderSession::Latest, .count = 4096});
+    displayed_entries = session->Query({.start = Debugger::RenderSession::Latest, .count = 4096});
+    if (displayed_session_id != session_id) {
+        displayed_output_sequence.reset();
+    }
     displayed_session_id = session_id;
     displayed_status = session->GetStatus();
     have_displayed_status = true;
     timeline->clear();
+    displayed_draw_items.clear();
     QTreeWidgetItem* frame_item = nullptr;
+    QTreeWidgetItem* target_item = nullptr;
+    QTreeWidgetItem* pipeline_item = nullptr;
     u32 displayed_frame = UINT32_MAX;
+    QString displayed_target;
+    QString displayed_pipeline;
     const QStringList topologies{tr("Triangles"), tr("Triangle strip"), tr("Triangle fan"),
                                  tr("Geometry shader")};
     for (int index = 0; index < static_cast<int>(displayed_entries.size()); ++index) {
@@ -344,6 +444,10 @@ void GraphicsTracingWidget::RefreshTimeline() {
             frame_item = new QTreeWidgetItem(timeline, {tr("Frame %1").arg(entry.frame)});
             frame_item->setFirstColumnSpanned(true);
             frame_item->setExpanded(true);
+            target_item = nullptr;
+            pipeline_item = nullptr;
+            displayed_target.clear();
+            displayed_pipeline.clear();
         }
         if (entry.kind == Debugger::TimelineKind::Frame) {
             continue;
@@ -372,40 +476,81 @@ void GraphicsTracingWidget::RefreshTimeline() {
         const QString topology = entry.draw_info.topology < topologies.size()
                                      ? topologies[entry.draw_info.topology]
                                      : tr("Unknown");
+        const auto draw_details = session->GetDrawDetails(entry.sequence);
+        const QString target_key = QStringLiteral("%1:%2:%3:%4")
+                                       .arg(entry.target.color_address)
+                                       .arg(entry.target.width)
+                                       .arg(entry.target.height)
+                                       .arg(entry.target.color_format);
+        if (!target_item || displayed_target != target_key) {
+            displayed_target = target_key;
+            displayed_pipeline.clear();
+            target_item = new QTreeWidgetItem(
+                frame_item, {tr("Render Target 0x%1 · %2x%3 · format %4")
+                                 .arg(entry.target.color_address, 8, 16, QLatin1Char('0'))
+                                 .arg(entry.target.width)
+                                 .arg(entry.target.height)
+                                 .arg(entry.target.color_format)});
+            target_item->setData(0, Qt::UserRole + 3, target_item->text(0));
+            target_item->setFirstColumnSpanned(true);
+            target_item->setExpanded(true);
+            pipeline_item = nullptr;
+        }
+        const QString shader = draw_details && draw_details->shader_id
+                                   ? QStringLiteral("0x%1").arg(draw_details->shader_id, 0, 16)
+                                   : tr("unavailable");
+        const QString pipeline_key = QStringLiteral("%1:%2").arg(shader, topology);
+        if (!pipeline_item || displayed_pipeline != pipeline_key) {
+            displayed_pipeline = pipeline_key;
+            pipeline_item = new QTreeWidgetItem(
+                target_item, {tr("Pipeline · VS %1 · %2").arg(shader, topology)});
+            pipeline_item->setData(0, Qt::UserRole + 3, pipeline_item->text(0));
+            pipeline_item->setFirstColumnSpanned(true);
+            pipeline_item->setExpanded(true);
+        }
         auto* item = new QTreeWidgetItem(
-            frame_item,
-            {call, category, topology, QString::number(entry.draw_info.vertex_count),
-             QStringLiteral("0x%1 · %2x%3")
-                 .arg(entry.target.color_address, 8, 16, QLatin1Char('0'))
-                 .arg(entry.target.width)
-                 .arg(entry.target.height),
-             changed});
+            pipeline_item, {call, category, topology, QString::number(entry.draw_info.vertex_count),
+                            QStringLiteral("0x%1 · %2x%3")
+                                .arg(entry.target.color_address, 8, 16, QLatin1Char('0'))
+                                .arg(entry.target.width)
+                                .arg(entry.target.height),
+                            changed});
         item->setData(0, Qt::UserRole, index);
+        item->setData(0, Qt::UserRole + 1, static_cast<int>(displayed_draw_items.size()));
+        displayed_draw_items.push_back(item);
+        for (auto* group : {target_item, pipeline_item}) {
+            const int count = group->data(0, Qt::UserRole + 2).toInt() + 1;
+            group->setData(0, Qt::UserRole + 2, count);
+            group->setText(0, group->data(0, Qt::UserRole + 3).toString() +
+                                  tr(" (%n draw(s))", nullptr, count));
+        }
     }
     for (int column = 1; column < timeline->columnCount(); ++column) {
         timeline->resizeColumnToContents(column);
     }
     timeline->header()->setSectionResizeMode(0, QHeaderView::Stretch);
+    {
+        const QSignalBlocker blocker{event_slider};
+        event_slider->setRange(0, std::max(0, static_cast<int>(displayed_draw_items.size()) - 1));
+        event_slider->setEnabled(!displayed_draw_items.empty());
+    }
+    event_position->setText(displayed_draw_items.empty()
+                                ? tr("No events")
+                                : tr("%1 events").arg(displayed_draw_items.size()));
     FilterTimeline(timeline_filter->text());
     if (follow_live->isChecked() && was_at_bottom && timeline->topLevelItemCount()) {
-        auto* frame = timeline->topLevelItem(timeline->topLevelItemCount() - 1);
-        if (frame->childCount()) {
-            timeline->setCurrentItem(frame->child(frame->childCount() - 1));
+        if (!displayed_draw_items.empty()) {
+            timeline->setCurrentItem(displayed_draw_items.back());
             timeline->scrollToItem(timeline->currentItem());
         }
     } else {
         if (selected_sequence) {
-            for (int frame = 0; frame < timeline->topLevelItemCount(); ++frame) {
-                auto* frame_item = timeline->topLevelItem(frame);
-                for (int draw = 0; draw < frame_item->childCount(); ++draw) {
-                    auto* item = frame_item->child(draw);
-                    const int index = item->data(0, Qt::UserRole).toInt();
-                    if (index >= 0 && index < static_cast<int>(displayed_entries.size()) &&
-                        displayed_entries[index].sequence == *selected_sequence) {
-                        timeline->setCurrentItem(item);
-                        frame = timeline->topLevelItemCount();
-                        break;
-                    }
+            for (auto* item : displayed_draw_items) {
+                const int index = item->data(0, Qt::UserRole).toInt();
+                if (index >= 0 && index < static_cast<int>(displayed_entries.size()) &&
+                    displayed_entries[index].sequence == *selected_sequence) {
+                    timeline->setCurrentItem(item);
+                    break;
                 }
             }
         }
@@ -415,27 +560,32 @@ void GraphicsTracingWidget::RefreshTimeline() {
 
 void GraphicsTracingWidget::FilterTimeline(const QString& text) {
     const QString needle = text.trimmed();
-    for (int frame = 0; frame < timeline->topLevelItemCount(); ++frame) {
-        auto* frame_item = timeline->topLevelItem(frame);
-        bool frame_matches = frame_item->text(0).contains(needle, Qt::CaseInsensitive);
-        bool any_visible = false;
-        for (int draw = 0; draw < frame_item->childCount(); ++draw) {
-            auto* item = frame_item->child(draw);
-            bool matches = needle.isEmpty() || frame_matches;
-            for (int column = 0; !matches && column < timeline->columnCount(); ++column) {
-                matches = item->text(column).contains(needle, Qt::CaseInsensitive);
-            }
-            item->setHidden(!matches);
-            any_visible |= matches;
+    const auto filter = [&](auto&& self, QTreeWidgetItem* item, bool parent_matches) -> bool {
+        bool matches = parent_matches || needle.isEmpty();
+        for (int column = 0; !matches && column < timeline->columnCount(); ++column) {
+            matches = item->text(column).contains(needle, Qt::CaseInsensitive);
         }
-        frame_item->setHidden(!any_visible);
+        bool child_visible = false;
+        for (int child = 0; child < item->childCount(); ++child) {
+            child_visible |= self(self, item->child(child), matches);
+        }
+        const bool visible = matches || child_visible;
+        item->setHidden(!visible);
+        return visible;
+    };
+    for (int frame = 0; frame < timeline->topLevelItemCount(); ++frame) {
+        filter(filter, timeline->topLevelItem(frame), false);
     }
 }
 
 void GraphicsTracingWidget::SelectTimelineEntry(QTreeWidgetItem* current) {
     selected_target.reset();
-    if (!current || !current->parent()) {
+    if (!current || !current->data(0, Qt::UserRole).isValid()) {
+        displayed_output_sequence.reset();
         timeline_details->setText(tr("Select a draw call to inspect it."));
+        output_preview->setPixmap(QPixmap{});
+        output_preview->setText(tr("Select a draw call to view its captured output."));
+        output_status->clear();
         open_color_target->setEnabled(false);
         open_depth_target->setEnabled(false);
         return;
@@ -445,6 +595,13 @@ void GraphicsTracingWidget::SelectTimelineEntry(QTreeWidgetItem* current) {
         return;
     }
     const auto& entry = displayed_entries[index];
+    {
+        const QSignalBlocker blocker{event_slider};
+        event_slider->setValue(current->data(0, Qt::UserRole + 1).toInt());
+    }
+    event_position->setText(tr("%1 / %2")
+                                .arg(current->data(0, Qt::UserRole + 1).toInt() + 1)
+                                .arg(displayed_draw_items.size()));
     selected_target = entry.target;
     timeline_details->setText(
         tr("Sequence %1 · frame %2 · draw %3 · vertex offset %4 · VS entry 0x%5\n"
@@ -458,15 +615,86 @@ void GraphicsTracingWidget::SelectTimelineEntry(QTreeWidgetItem* current) {
             .arg(entry.target.depth_address, 8, 16, QLatin1Char('0'))
             .arg(entry.target.width)
             .arg(entry.target.height));
-    const bool live = render_sessions &&
-                      render_sessions->GetActiveId() ==
-                          Debugger::RenderSessionManager::LiveSessionId;
+    const auto draw_details = render_sessions->GetActive()->GetDrawDetails(entry.sequence);
+    if (draw_details) {
+        timeline_details->setText(
+            timeline_details->text() +
+            tr("\nRegister writes %1 · shader %2 · resources %3")
+                .arg(draw_details->write_count)
+                .arg(draw_details->shader_id
+                         ? QStringLiteral("0x%1").arg(draw_details->shader_id, 0, 16)
+                         : tr("unavailable"))
+                .arg(draw_details->resource_count));
+    }
+    const bool live = render_sessions && render_sessions->GetActiveId() ==
+                                             Debugger::RenderSessionManager::LiveSessionId;
     open_color_target->setEnabled(live && entry.target.color_address != 0);
     open_depth_target->setEnabled(live && entry.target.depth_address != 0);
     if (!live) {
         timeline_details->setText(timeline_details->text() +
-                                  tr("\nImported metadata has no render-target bytes."));
+                                  tr("\nImported resource bytes are retained; the surface viewer "
+                                     "currently reads live memory only."));
     }
+    UpdateOutput(entry.sequence);
+}
+
+void GraphicsTracingWidget::SelectEvent(int event) {
+    if (event < 0 || event >= static_cast<int>(displayed_draw_items.size())) {
+        return;
+    }
+    auto* item = displayed_draw_items[event];
+    if (item->isHidden()) {
+        return;
+    }
+    timeline->setCurrentItem(item);
+    timeline->scrollToItem(item, QAbstractItemView::PositionAtCenter);
+}
+
+void GraphicsTracingWidget::UpdateOutputCaptureState() {
+    render_sessions->GetLive()->SetOutputCaptureEnabled(
+        isVisible() && Debugger::IsDockActive(this) &&
+        render_sessions->GetActiveId() == Debugger::RenderSessionManager::LiveSessionId);
+}
+
+void GraphicsTracingWidget::UpdateOutput(Debugger::u32 sequence) {
+    if (!render_sessions || displayed_output_sequence == sequence) {
+        return;
+    }
+    const auto resource = render_sessions->GetActive()->GetDrawOutput(sequence);
+    if (!resource) {
+        output_preview->setPixmap(QPixmap{});
+        output_preview->setText(tr("Output was not captured for this draw."));
+        output_status->setText(tr("Output capture is available while the live debugger is enabled "
+                                  "and visible."));
+        return;
+    }
+    if (resource->bytes.empty()) {
+        output_preview->setPixmap(QPixmap{});
+        output_preview->setText(tr("Output data is not available for this draw."));
+        output_status->setText(tr("The render target metadata was captured without pixel data."));
+        return;
+    }
+    displayed_output_sequence = sequence;
+    const QImage image = DecodeColorTarget(*resource);
+    if (image.isNull()) {
+        output_preview->setPixmap(QPixmap{});
+        output_preview->setText(tr("Captured output cannot be decoded."));
+        output_status->setText(tr("%1x%2 · format %3 · %4 bytes")
+                                   .arg(resource->width)
+                                   .arg(resource->height)
+                                   .arg(resource->format)
+                                   .arg(resource->bytes.size()));
+        return;
+    }
+    output_preview->setText({});
+    output_preview->setPixmap(
+        QPixmap::fromImage(image).scaled(960, 540, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+    output_status->setText(tr("%1x%2 · format %3 · address 0x%4 · %5 bytes")
+                               .arg(resource->width)
+                               .arg(resource->height)
+                               .arg(resource->format)
+                               .arg(resource->address, 0, 16)
+                               .arg(resource->bytes.size()));
 }
 
 void GraphicsTracingWidget::OpenColorTarget() {
@@ -506,6 +734,7 @@ void GraphicsTracingWidget::ImportCapture() {
     Debugger::Capture capture;
     Debugger::CaptureLimits limits;
     limits.total_bytes = static_cast<u64>(Settings::values.debugger_cache_mb.GetValue()) << 20;
+    limits.owned_bytes = limits.total_bytes;
     std::string error;
     if (!Debugger::LoadCapture(filename.toStdString(), capture, error, limits)) {
         QMessageBox::critical(this, tr("Capture import failed"), QString::fromStdString(error));
@@ -513,8 +742,9 @@ void GraphicsTracingWidget::ImportCapture() {
     }
     const auto id = render_sessions->AddImported(std::move(capture));
     if (!id) {
-        QMessageBox::critical(this, tr("Capture import failed"),
-                              tr("The capture is invalid or the imported-session limit was reached."));
+        QMessageBox::critical(
+            this, tr("Capture import failed"),
+            tr("The capture is invalid or the imported-session limit was reached."));
         return;
     }
     RefreshSessions(id);
@@ -561,13 +791,12 @@ void GraphicsTracingWidget::RefreshSessions(Debugger::u64 selected) {
     session_selector->clear();
     int selected_index = 0;
     for (const auto& descriptor : render_sessions->List()) {
-        const QString name = descriptor.live
-                                 ? tr("Live — %1/%2")
-                                       .arg(QString::fromStdString(descriptor.producer),
-                                            QString::fromStdString(descriptor.backend))
-                                 : tr("Imported — %1/%2")
-                                       .arg(QString::fromStdString(descriptor.producer),
-                                            QString::fromStdString(descriptor.backend));
+        const QString name = descriptor.live ? tr("Live — %1/%2")
+                                                   .arg(QString::fromStdString(descriptor.producer),
+                                                        QString::fromStdString(descriptor.backend))
+                                             : tr("Imported — %1/%2")
+                                                   .arg(QString::fromStdString(descriptor.producer),
+                                                        QString::fromStdString(descriptor.backend));
         session_selector->addItem(name, QVariant::fromValue<qulonglong>(descriptor.id));
         if (descriptor.id == selected) {
             selected_index = session_selector->count() - 1;

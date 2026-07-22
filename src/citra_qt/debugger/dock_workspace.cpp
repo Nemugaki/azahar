@@ -4,8 +4,8 @@
 #include <QDockWidget>
 #include <QHBoxLayout>
 #include <QPushButton>
-#include <QVariant>
 #include <QVBoxLayout>
+#include <QVariant>
 #include <QWidget>
 #include "citra_qt/debugger/dock_workspace.h"
 
@@ -16,6 +16,15 @@ constexpr auto ContentProperty = "debuggerWorkspaceContent";
 constexpr auto ToggleProperty = "debuggerWorkspaceToggle";
 constexpr auto EnabledProperty = "debuggerWorkspaceEnabled";
 constexpr auto AvailableProperty = "debuggerWorkspaceAvailable";
+constexpr auto HandlerProperty = "debuggerWorkspaceHandler";
+
+class ActiveHandler final : public QObject {
+public:
+    ActiveHandler(QDockWidget* dock, std::function<void(bool)> callback_)
+        : QObject(dock), callback{std::move(callback_)} {}
+
+    std::function<void(bool)> callback;
+};
 
 void ApplyDockState(QDockWidget* dock) {
     auto* content = static_cast<QWidget*>(dock->property(ContentProperty).value<QObject*>());
@@ -36,6 +45,11 @@ void ApplyDockState(QDockWidget* dock) {
     content->setUpdatesEnabled(active);
     if (active) {
         content->update();
+    }
+
+    auto* handler = static_cast<ActiveHandler*>(dock->property(HandlerProperty).value<QObject*>());
+    if (handler && handler->callback) {
+        handler->callback(active);
     }
 
     toggle->setText(user_enabled ? QObject::tr("Disable") : QObject::tr("Enable"));
@@ -69,8 +83,6 @@ void ConfigureDockWorkspace(QDockWidget* dock) {
     auto* layout = new QVBoxLayout(container);
     auto* controls = new QHBoxLayout;
     auto* toggle = new QPushButton(QObject::tr("Disable"), container);
-    toggle->setCheckable(true);
-    toggle->setChecked(true);
     toggle->setAccessibleName(QObject::tr("Enable or disable %1").arg(dock->windowTitle()));
     controls->addStretch();
     controls->addWidget(toggle);
@@ -87,8 +99,8 @@ void ConfigureDockWorkspace(QDockWidget* dock) {
     dock->setProperty(EnabledProperty, true);
     dock->setProperty(AvailableProperty, available);
 
-    QObject::connect(toggle, &QPushButton::toggled, dock, [dock](bool enabled) {
-        dock->setProperty(EnabledProperty, enabled);
+    QObject::connect(toggle, &QPushButton::clicked, dock, [dock] {
+        dock->setProperty(EnabledProperty, !dock->property(EnabledProperty).toBool());
         ApplyDockState(dock);
     });
     QObject::connect(dock, &QDockWidget::topLevelChanged, dock, [dock](bool floating) {
@@ -115,6 +127,24 @@ void SetDockAvailable(QDockWidget* dock, bool available) {
 bool IsDockActive(const QDockWidget* dock) {
     return dock && dock->property(EnabledProperty).toBool() &&
            dock->property(AvailableProperty).toBool();
+}
+
+bool IsDockUserEnabled(const QDockWidget* dock) {
+    return dock && dock->property(EnabledProperty).toBool();
+}
+
+void SetDockActiveHandler(QDockWidget* dock, std::function<void(bool)> callback) {
+    if (!dock) {
+        return;
+    }
+    if (auto* old = static_cast<QObject*>(dock->property(HandlerProperty).value<QObject*>())) {
+        delete old;
+    }
+    auto* handler = new ActiveHandler(dock, std::move(callback));
+    dock->setProperty(HandlerProperty, QVariant::fromValue(static_cast<QObject*>(handler)));
+    if (dock->property(ContentProperty).isValid()) {
+        ApplyDockState(dock);
+    }
 }
 
 } // namespace Debugger

@@ -3,6 +3,7 @@
 // Refer to the license.txt file included.
 
 #include <QListView>
+#include "citra_qt/debugger/dock_workspace.h"
 #include "citra_qt/debugger/graphics/graphics.h"
 #include "citra_qt/util/util.h"
 #include "core/core.h"
@@ -75,13 +76,21 @@ GPUCommandStreamWidget::GPUCommandStreamWidget(Core::System& system_, QWidget* p
 }
 
 void GPUCommandStreamWidget::Register() {
+    if (registered || !Debugger::IsDockActive(this)) {
+        return;
+    }
     auto& debugger = system.GPU().Debugger();
     debugger.RegisterObserver(&model);
+    registered = true;
 }
 
 void GPUCommandStreamWidget::Unregister() {
+    if (!registered) {
+        return;
+    }
     auto& debugger = system.GPU().Debugger();
     debugger.UnregisterObserver(&model);
+    registered = false;
 }
 
 void GPUCommandStreamWidget::showEvent(QShowEvent* event) {

@@ -161,7 +161,7 @@ public:
     void OnEvent(Event event, const void* data) {
         // This check is left in the header to allow the compiler to inline it.
         auto& breakpoint = breakpoints[static_cast<int>(event)];
-        if (ignore_breakpoints_until_frame || !breakpoint.enabled ||
+        if (!breakpoints_enabled || ignore_breakpoints_until_frame || !breakpoint.enabled ||
             !MatchesCondition(event, data))
             return;
         ++breakpoint.hit_count;
@@ -182,6 +182,9 @@ public:
 
     /// Records an ordered draw call and emits the matching debugger event.
     void OnDraw(const Debugger::DrawInfo& info);
+    void OnDraw(const Debugger::DrawInfo& info, const Debugger::Shader& shader,
+                std::span<const Debugger::ResourceView> resources);
+    void OnRegisterWrite(Debugger::RegisterWrite write);
 
     /**
      * Resume from the current breakpoint.
@@ -202,6 +205,10 @@ public:
 
     bool IsBreakpointEnabled(Event event) const {
         return breakpoints[static_cast<int>(event)].enabled;
+    }
+
+    void SetBreakpointsEnabled(bool enabled) {
+        breakpoints_enabled = enabled;
     }
 
     void SetBreakpointCondition(Event event, BreakPointCondition condition);
@@ -235,6 +242,7 @@ public:
     std::array<BreakPoint, (int)Event::NumEvents> breakpoints;
     Event active_breakpoint = Event::FirstEvent;
     bool at_breakpoint = false;
+    std::atomic_bool breakpoints_enabled{true};
 
     std::shared_ptr<CiTrace::Recorder> recorder = nullptr;
 
@@ -244,7 +252,7 @@ private:
      * Private default constructor to make sure people always construct this through Construct()
      * instead.
      */
-    DebugContext() : render_sessions{std::make_shared<Debugger::RenderSessionManager>()} {}
+    DebugContext();
 
     /// Mutex protecting current breakpoint state.
     std::mutex breakpoint_mutex;

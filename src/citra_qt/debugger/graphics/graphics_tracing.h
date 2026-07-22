@@ -19,6 +19,7 @@ class QCheckBox;
 class QComboBox;
 class QLineEdit;
 class QPushButton;
+class QSlider;
 class QSpinBox;
 class QTreeWidget;
 class QTreeWidgetItem;
@@ -58,6 +59,9 @@ signals:
 
 private:
     void OpenTarget(bool depth);
+    void SelectEvent(int event);
+    void UpdateOutput(Debugger::u32 sequence);
+    void UpdateOutputCaptureState();
 
     Core::System& system;
     std::shared_ptr<Debugger::RenderSessionManager> render_sessions;
@@ -67,13 +71,19 @@ private:
     QCheckBox* follow_live;
     QCheckBox* freeze_timeline;
     QTreeWidget* timeline;
+    QSlider* event_slider;
+    QLabel* event_position;
     QLabel* timeline_details;
+    QLabel* output_preview;
+    QLabel* output_status;
     QPushButton* open_color_target;
     QPushButton* open_depth_target;
     QComboBox* session_selector;
     QPushButton* remove_capture;
     std::vector<Debugger::TimelineEntry> displayed_entries;
+    std::vector<QTreeWidgetItem*> displayed_draw_items;
     std::optional<Debugger::RenderTarget> selected_target;
+    std::optional<Debugger::u32> displayed_output_sequence;
     Debugger::TimelineStatus displayed_status{};
     Debugger::u64 displayed_session_id{};
     bool have_displayed_status{};

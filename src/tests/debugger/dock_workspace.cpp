@@ -17,6 +17,9 @@ int main(int argc, char* argv[]) {
     auto* content = new QWidget;
     dock.setWidget(content);
     dock.setEnabled(false);
+    bool callback_active{};
+    Debugger::SetDockActiveHandler(&dock,
+                                   [&callback_active](bool active) { callback_active = active; });
 
     window.addDockWidget(Qt::RightDockWidgetArea, &dock);
     Debugger::ConfigureDockWorkspace(&dock);
@@ -30,15 +33,18 @@ int main(int argc, char* argv[]) {
     assert(dock.isAncestorOf(content));
     Debugger::SetDockAvailable(&dock, false);
     assert(!content->isEnabled());
+    assert(Debugger::IsDockUserEnabled(&dock));
 
     auto* toggle = dock.findChild<QPushButton*>();
     assert(toggle && toggle->isEnabled());
+    assert(!toggle->isCheckable());
     toggle->click();
-    assert(dock.isEnabled() && toggle->isEnabled() && !content->isEnabled());
+    assert(dock.isEnabled() && toggle->isEnabled() && !content->isEnabled() && !callback_active);
+    assert(!Debugger::IsDockUserEnabled(&dock));
 
     Debugger::SetDockAvailable(&dock, true);
     toggle->click();
-    assert(Debugger::IsDockActive(&dock) && content->isEnabled());
+    assert(Debugger::IsDockActive(&dock) && content->isEnabled() && callback_active);
 
     dock.setFloating(true);
     app.processEvents();

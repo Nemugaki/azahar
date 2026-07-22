@@ -4,8 +4,8 @@
 
 #include <algorithm>
 #include <QApplication>
-#include <QComboBox>
 #include <QCheckBox>
+#include <QComboBox>
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QLabel>
@@ -15,6 +15,7 @@
 #include <QSpinBox>
 #include <QTreeView>
 #include <QVBoxLayout>
+#include "citra_qt/debugger/dock_workspace.h"
 #include "citra_qt/debugger/graphics/graphics_breakpoints.h"
 #include "citra_qt/debugger/graphics/graphics_breakpoints_p.h"
 #include "core/core.h"
@@ -198,6 +199,11 @@ GraphicsBreakPointsWidget::GraphicsBreakPointsWidget(
     : QDockWidget(tr("Pica Breakpoints"), parent),
       Pica::DebugContext::BreakPointObserver(debug_context), system{system_} {
     setObjectName(QStringLiteral("PicaBreakPointsWidget"));
+    Debugger::SetDockActiveHandler(this, [context = std::weak_ptr{debug_context}](bool active) {
+        if (const auto locked = context.lock()) {
+            locked->SetBreakpointsEnabled(active);
+        }
+    });
 
     status_text = new QLabel(tr("Emulation running"));
     resume_button = new QPushButton(tr("Resume"));
@@ -229,21 +235,18 @@ GraphicsBreakPointsWidget::GraphicsBreakPointsWidget(
 
     condition_field = new QComboBox;
     condition_field->setAccessibleName(tr("Breakpoint condition field"));
-    condition_field->addItem(
-        tr("Always"), static_cast<u32>(Pica::DebugContext::ConditionField::None));
-    condition_field->addItem(
-        tr("Pica command register"),
-        static_cast<u32>(Pica::DebugContext::ConditionField::EventData));
-    condition_field->addItem(
-        tr("Color target"),
-        static_cast<u32>(Pica::DebugContext::ConditionField::ColorBuffer));
-    condition_field->addItem(
-        tr("Depth target"),
-        static_cast<u32>(Pica::DebugContext::ConditionField::DepthBuffer));
-    condition_field->addItem(
-        tr("Draw index"), static_cast<u32>(Pica::DebugContext::ConditionField::DrawIndex));
-    condition_field->addItem(
-        tr("Frame index"), static_cast<u32>(Pica::DebugContext::ConditionField::FrameIndex));
+    condition_field->addItem(tr("Always"),
+                             static_cast<u32>(Pica::DebugContext::ConditionField::None));
+    condition_field->addItem(tr("Pica command register"),
+                             static_cast<u32>(Pica::DebugContext::ConditionField::EventData));
+    condition_field->addItem(tr("Color target"),
+                             static_cast<u32>(Pica::DebugContext::ConditionField::ColorBuffer));
+    condition_field->addItem(tr("Depth target"),
+                             static_cast<u32>(Pica::DebugContext::ConditionField::DepthBuffer));
+    condition_field->addItem(tr("Draw index"),
+                             static_cast<u32>(Pica::DebugContext::ConditionField::DrawIndex));
+    condition_field->addItem(tr("Frame index"),
+                             static_cast<u32>(Pica::DebugContext::ConditionField::FrameIndex));
     condition_value = new QLineEdit;
     condition_value->setAccessibleName(tr("Breakpoint condition value"));
     condition_mask = new QLineEdit(QStringLiteral("0xffffffff"));
@@ -261,8 +264,6 @@ GraphicsBreakPointsWidget::GraphicsBreakPointsWidget(
 
     qRegisterMetaType<Pica::DebugContext::Event>("Pica::DebugContext::Event");
 
-    connect(breakpoint_list, &QTreeView::doubleClicked, this,
-            &GraphicsBreakPointsWidget::OnItemDoubleClicked);
     connect(breakpoint_list->selectionModel(), &QItemSelectionModel::currentChanged, this,
             [this](const QModelIndex& current) { LoadCondition(current); });
     const auto update_condition_controls = [this] {
@@ -271,11 +272,10 @@ GraphicsBreakPointsWidget::GraphicsBreakPointsWidget(
         const bool conditional = field != Pica::DebugContext::ConditionField::None;
         condition_value->setEnabled(conditional);
         condition_mask->setEnabled(conditional);
-        condition_current->setEnabled(
-            field == Pica::DebugContext::ConditionField::ColorBuffer ||
-            field == Pica::DebugContext::ConditionField::DepthBuffer ||
-            field == Pica::DebugContext::ConditionField::DrawIndex ||
-            field == Pica::DebugContext::ConditionField::FrameIndex);
+        condition_current->setEnabled(field == Pica::DebugContext::ConditionField::ColorBuffer ||
+                                      field == Pica::DebugContext::ConditionField::DepthBuffer ||
+                                      field == Pica::DebugContext::ConditionField::DrawIndex ||
+                                      field == Pica::DebugContext::ConditionField::FrameIndex);
     };
     connect(condition_field, qOverload<int>(&QComboBox::currentIndexChanged), this,
             update_condition_controls);
@@ -287,8 +287,7 @@ GraphicsBreakPointsWidget::GraphicsBreakPointsWidget(
             &GraphicsBreakPointsWidget::OnResumeRequested);
     connect(frame_advance_button, &QPushButton::clicked, this,
             &GraphicsBreakPointsWidget::FrameAdvanceRequested);
-    connect(capture_button, &QPushButton::clicked, this,
-            &GraphicsBreakPointsWidget::CaptureState);
+    connect(capture_button, &QPushButton::clicked, this, &GraphicsBreakPointsWidget::CaptureState);
 
     connect(this, &GraphicsBreakPointsWidget::BreakPointHit, this,
             &GraphicsBreakPointsWidget::OnBreakPointHit, Qt::BlockingQueuedConnection);
@@ -352,10 +351,8 @@ void GraphicsBreakPointsWidget::LoadCondition(const QModelIndex& index) {
     const auto condition = context->GetBreakpointCondition(static_cast<Event>(index.row()));
     condition_field->setCurrentIndex(
         std::max(condition_field->findData(static_cast<u32>(condition.field)), 0));
-    condition_value->setText(
-        QStringLiteral("0x%1").arg(condition.value, 8, 16, QLatin1Char('0')));
-    condition_mask->setText(
-        QStringLiteral("0x%1").arg(condition.mask, 8, 16, QLatin1Char('0')));
+    condition_value->setText(QStringLiteral("0x%1").arg(condition.value, 8, 16, QLatin1Char('0')));
+    condition_mask->setText(QStringLiteral("0x%1").arg(condition.mask, 8, 16, QLatin1Char('0')));
     const auto options = context->GetBreakpointOptions(static_cast<Event>(index.row()));
     one_shot->setChecked(options.one_shot);
     skip_count->setValue(static_cast<int>(options.skip_remaining));
@@ -370,8 +367,8 @@ void GraphicsBreakPointsWidget::ApplyCondition() {
         return;
     }
     Pica::DebugContext::BreakPointCondition condition{};
-    condition.field = static_cast<Pica::DebugContext::ConditionField>(
-        condition_field->currentData().toUInt());
+    condition.field =
+        static_cast<Pica::DebugContext::ConditionField>(condition_field->currentData().toUInt());
     if (condition.field != Pica::DebugContext::ConditionField::None) {
         bool value_ok{};
         bool mask_ok{};
@@ -396,17 +393,16 @@ void GraphicsBreakPointsWidget::UseCurrentConditionValue() {
     if (!context) {
         return;
     }
-    const auto field = static_cast<Pica::DebugContext::ConditionField>(
-        condition_field->currentData().toUInt());
+    const auto field =
+        static_cast<Pica::DebugContext::ConditionField>(condition_field->currentData().toUInt());
     const auto session = context->GetRenderSession();
     const auto target = session->GetRenderTarget();
     const auto position = session->GetPosition();
-    const u32 value = field == Pica::DebugContext::ConditionField::ColorBuffer
-                          ? target.color_address
-                      : field == Pica::DebugContext::ConditionField::DepthBuffer
-                          ? target.depth_address
-                      : field == Pica::DebugContext::ConditionField::DrawIndex ? position.draw
-                                                                              : position.frame;
+    const u32 value =
+        field == Pica::DebugContext::ConditionField::ColorBuffer   ? target.color_address
+        : field == Pica::DebugContext::ConditionField::DepthBuffer ? target.depth_address
+        : field == Pica::DebugContext::ConditionField::DrawIndex   ? position.draw
+                                                                   : position.frame;
     condition_value->setText(QStringLiteral("0x%1").arg(value, 8, 16, QLatin1Char('0')));
 }
 
@@ -436,23 +432,12 @@ void GraphicsBreakPointsWidget::OnResumed() {
 
 void GraphicsBreakPointsWidget::CaptureState() {
     const auto capture = system.CreateDebugCapture();
-    status_text->setText(capture.id ? tr("Stored capture %1 (%2 bytes)").arg(capture.id).arg(capture.size)
-                                    : tr("State changed before it could be captured"));
+    status_text->setText(capture.id
+                             ? tr("Stored capture %1 (%2 bytes)").arg(capture.id).arg(capture.size)
+                             : tr("State changed before it could be captured"));
 }
 
 void GraphicsBreakPointsWidget::OnResumeRequested() {
     if (auto context = context_weak.lock())
         context->Resume();
-}
-
-void GraphicsBreakPointsWidget::OnItemDoubleClicked(const QModelIndex& index) {
-    if (!index.isValid())
-        return;
-
-    QModelIndex check_index = breakpoint_list->model()->index(index.row(), 0);
-    QVariant enabled = breakpoint_list->model()->data(check_index, Qt::CheckStateRole);
-    QVariant new_state = Qt::Unchecked;
-    if (enabled == Qt::Unchecked)
-        new_state = Qt::Checked;
-    breakpoint_list->model()->setData(check_index, new_state, Qt::CheckStateRole);
 }
