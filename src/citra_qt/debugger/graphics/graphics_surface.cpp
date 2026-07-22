@@ -634,7 +634,7 @@ void GraphicsSurfaceWidget::OnUpdate() {
 
         for (unsigned int y = 0; y < surface_height; ++y) {
             for (unsigned int x = 0; x < surface_width; ++x) {
-                Common::Vec4<u8> color = Pica::Texture::LookupTexture(buffer, x, y, info, true);
+                Common::Vec4<u8> color = Pica::Texture::LookupTexture(buffer, x, y, info, false);
                 decoded_image.setPixel(x, y, qRgba(color.r(), color.g(), color.b(), color.a()));
             }
         }

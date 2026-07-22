@@ -721,22 +721,27 @@ void GRenderWindow::ReleaseRenderTarget() {
     main_context.reset();
 }
 
-void GRenderWindow::CaptureScreenshot(u32 res_scale, const QString& screenshot_path) {
+bool GRenderWindow::CaptureScreenshot(u32 res_scale, const QString& screenshot_path,
+                                      std::function<void(bool)> completed) {
     auto& renderer = system.GPU().Renderer();
     if (res_scale == 0) {
         res_scale = renderer.GetResolutionScaleFactor();
     }
 
     const auto layout{Layout::FrameLayoutFromResolutionScale(res_scale, is_secondary)};
-    screenshot_image = QImage(QSize(layout.width, layout.height), QImage::Format_RGB32);
-    renderer.RequestScreenshot(
-        screenshot_image.bits(),
-        [this, screenshot_path](bool invert_y) {
+    auto image = std::make_shared<QImage>(QSize(layout.width, layout.height), QImage::Format_RGB32);
+    return renderer.RequestScreenshot(
+        image->bits(),
+        [image, screenshot_path, completed = std::move(completed)](bool invert_y) {
             const std::string std_screenshot_path = screenshot_path.toStdString();
-            if (GetMirroredImage(screenshot_image, false, invert_y).save(screenshot_path)) {
+            const bool saved = GetMirroredImage(*image, false, invert_y).save(screenshot_path);
+            if (saved) {
                 LOG_INFO(Frontend, "Screenshot saved to \"{}\"", std_screenshot_path);
             } else {
                 LOG_ERROR(Frontend, "Failed to save screenshot to \"{}\"", std_screenshot_path);
+            }
+            if (completed) {
+                completed(saved);
             }
         },
         layout);

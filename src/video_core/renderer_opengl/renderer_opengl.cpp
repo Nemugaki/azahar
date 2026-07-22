@@ -155,7 +155,7 @@ void RendererOpenGL::SwapBuffers() {
 }
 
 void RendererOpenGL::RenderScreenshot() {
-    if (settings.screenshot_requested.exchange(false)) {
+    if (settings.screenshot_requested) {
         // Draw this frame to the screenshot framebuffer
         screenshot_framebuffer.Create();
         GLuint old_read_fb = state.draw.read_framebuffer;
@@ -183,7 +183,9 @@ void RendererOpenGL::RenderScreenshot() {
         state.Apply();
         glDeleteRenderbuffers(1, &renderbuffer);
 
-        settings.screenshot_complete_callback(true);
+        auto completed = std::move(settings.screenshot_complete_callback);
+        settings.screenshot_requested = false;
+        completed(true);
     }
 }
 

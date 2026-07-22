@@ -52,8 +52,8 @@ RPCServer::~RPCServer() {
     wait_request_handler_thread.request_stop();
     request_handler_thread.join();
     wait_request_handler_thread.join();
-    if (pica_trace_owned && Pica::DebugUtils::IsPicaTracing()) {
-        Pica::DebugUtils::FinishPicaTracing();
+    if (pica_trace_owned) {
+        Pica::DebugUtils::FinishPicaTracing(Pica::DebugUtils::PicaTraceOwner::RPC);
     }
 }
 
@@ -526,13 +526,14 @@ void RPCServer::HandlePicaRenderTarget(Packet& packet) {
 void RPCServer::HandlePicaTrace(Packet& packet, PicaTraceOperation operation, u32 generation,
                                 u32 start, u32 count, u32 register_id) {
     if (operation == PicaTraceOperation::Start) {
-        if (!Pica::DebugUtils::IsPicaTracing()) {
-            Pica::DebugUtils::StartPicaTracing();
-            pica_trace_owned = true;
+        if (!pica_trace_owned) {
+            pica_trace_owned = Pica::DebugUtils::StartPicaTracing(
+                Pica::DebugUtils::PicaTraceOwner::RPC);
         }
     } else if (operation == PicaTraceOperation::Stop) {
-        if (pica_trace_owned && Pica::DebugUtils::IsPicaTracing()) {
-            if (auto trace = Pica::DebugUtils::FinishPicaTracing()) {
+        if (pica_trace_owned) {
+            if (auto trace = Pica::DebugUtils::FinishPicaTracing(
+                    Pica::DebugUtils::PicaTraceOwner::RPC)) {
                 pica_trace_truncated = trace->truncated;
                 pica_trace_data.resize(trace->writes.size() *
                                        sizeof(Pica::DebugUtils::PicaTrace::Write));

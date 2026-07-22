@@ -139,6 +139,7 @@ Q_IMPORT_PLUGIN(QWindowsIntegrationPlugin);
 #endif
 
 constexpr int default_mouse_timeout = 2500;
+constexpr int workspace_state_version = 1;
 
 /**
  * "Callouts" are one-time instructional messages shown to the user. In the config settings, there
@@ -577,24 +578,7 @@ void GMainWindow::InitializeWidgets() {
     addDockWidget(Qt::RightDockWidgetArea, game_dock_widget);
     game_dock_widget->hide();
 
-    auto* show_game = new QAction(tr("Game"), this);
-    ui->menu_View->insertAction(ui->action_Fullscreen, show_game);
-    connect(show_game, &QAction::triggered, this, [this] {
-        if (ui->action_Single_Window_Mode->isChecked()) {
-            game_dock_widget->show();
-            game_dock_widget->raise();
-            if (emulation_running) {
-                ui->centralwidget->hide();
-            }
-            if (game_dock_widget->isFloating()) {
-                game_dock_widget->activateWindow();
-            }
-        } else if (emulation_running) {
-            render_window->show();
-            render_window->raise();
-            render_window->activateWindow();
-        }
-    });
+    ui->menu_View->insertAction(ui->action_Fullscreen, game_dock_widget->toggleViewAction());
 
     game_list = new GameList(*play_time_manager, this);
     ui->horizontalLayout->addWidget(game_list);
@@ -610,7 +594,6 @@ void GMainWindow::InitializeWidgets() {
         loading_screen->Clear();
         if (emulation_running) {
             if (ui->action_Single_Window_Mode->isChecked()) {
-                ui->centralwidget->hide();
                 game_dock_widget->show();
                 game_dock_widget->raise();
             } else {
@@ -750,8 +733,7 @@ void GMainWindow::InitializeWidgets() {
 }
 
 void GMainWindow::InitializeDebugWidgets() {
-    setDockOptions(dockOptions() | QMainWindow::AllowNestedDocks | QMainWindow::AllowTabbedDocks |
-                   QMainWindow::GroupedDragging);
+    setDockOptions(dockOptions() | QMainWindow::AllowNestedDocks | QMainWindow::AllowTabbedDocks);
 
     if (Pica::g_debug_context) {
         connect(ui->action_Create_Pica_Surface_Viewer, &QAction::triggered, this,
@@ -765,15 +747,7 @@ void GMainWindow::InitializeDebugWidgets() {
         addDockWidget(area, dock);
         Debugger::ConfigureDockWorkspace(dock);
         dock->hide();
-        auto* spawn = debug_menu->addAction(dock->windowTitle());
-        spawn->setIcon(dock->toggleViewAction()->icon());
-        connect(spawn, &QAction::triggered, dock, [dock] {
-            dock->show();
-            dock->raise();
-            if (dock->isFloating()) {
-                dock->activateWindow();
-            }
-        });
+        debug_menu->addAction(dock->toggleViewAction());
     };
 
 #if MICROPROFILE_ENABLED
@@ -1057,7 +1031,7 @@ void GMainWindow::SetDefaultUIGeometry() {
 
 void GMainWindow::RestoreUIState() {
     restoreGeometry(UISettings::values.geometry);
-    restoreState(UISettings::values.state);
+    restoreState(UISettings::values.state, workspace_state_version);
     render_window->restoreGeometry(UISettings::values.renderwindow_geometry);
     secondary_window->restoreGeometry(UISettings::values.secondarywindow_geometry);
 #if MICROPROFILE_ENABLED
@@ -2914,7 +2888,6 @@ void GMainWindow::ToggleWindowMode() {
                 ui->centralwidget->show();
                 game_dock_widget->hide();
             } else {
-                ui->centralwidget->hide();
                 game_dock_widget->show();
                 render_window->setFocus();
             }
@@ -4452,7 +4425,7 @@ void GMainWindow::UpdateUISettings() {
     if (!secondary_window->isFullScreen()) {
         UISettings::values.secondarywindow_geometry = secondary_window->saveGeometry();
     }
-    UISettings::values.state = saveState();
+    UISettings::values.state = saveState(workspace_state_version);
 #if MICROPROFILE_ENABLED
     UISettings::values.microprofile_geometry = microProfileDialog->saveGeometry();
     UISettings::values.microprofile_visible = microProfileDialog->isVisible();

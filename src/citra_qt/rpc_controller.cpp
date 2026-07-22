@@ -3,6 +3,7 @@
 // Refer to the license.txt file included.
 
 #include <charconv>
+#include <future>
 #include <QDir>
 #include <QFileInfo>
 #include <QLabel>
@@ -174,9 +175,15 @@ Core::RPC::EmulationControlReply RPCController::Execute(Core::RPC::EmulationCont
             auto* const screenshot_window = main_window.secondary_window->HasFocus()
                                                 ? main_window.secondary_window
                                                 : main_window.render_window;
-            screenshot_window->CaptureScreenshot(
-                UISettings::values.screenshot_resolution_factor.GetValue(), output.filePath());
+            std::promise<bool> completed;
+            auto result = completed.get_future();
+            const bool scheduled = screenshot_window->CaptureScreenshot(
+                UISettings::values.screenshot_resolution_factor.GetValue(), output.filePath(),
+                [&completed](bool saved) { completed.set_value(saved); });
             main_window.OnResumeGame(false);
+            if (!scheduled || !result.get()) {
+                reply.result = Core::RPC::EmulationResult::Failed;
+            }
         }
         break;
     }

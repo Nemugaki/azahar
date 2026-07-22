@@ -450,7 +450,7 @@ WaitTreeWidget::WaitTreeWidget(Core::System& system_, QWidget* parent)
 }
 
 void WaitTreeWidget::OnDebugModeEntered() {
-    if (!system.IsPoweredOn() || !Debugger::IsDockUserEnabled(this)) {
+    if (!system.IsPoweredOn()) {
         return;
     }
     model->InitItems(system);

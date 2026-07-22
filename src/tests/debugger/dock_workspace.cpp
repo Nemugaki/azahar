@@ -33,6 +33,8 @@ int main(int argc, char* argv[]) {
     assert(dock.isAncestorOf(content));
     Debugger::SetDockAvailable(&dock, false);
     assert(!content->isEnabled());
+    assert(content->updatesEnabled());
+    assert(dock.minimumSize() == QSize(1, 1));
     assert(Debugger::IsDockUserEnabled(&dock));
 
     auto* toggle = dock.findChild<QPushButton*>();

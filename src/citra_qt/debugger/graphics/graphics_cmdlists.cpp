@@ -246,11 +246,19 @@ GPUCommandListWidget::GPUCommandListWidget(Core::System& system_, QWidget* paren
 }
 
 void GPUCommandListWidget::OnToggleTracing() {
-    if (!Pica::DebugUtils::IsPicaTracing()) {
-        Pica::DebugUtils::StartPicaTracing();
-        toggle_tracing->setText(tr("Finish Tracing"));
+    using Pica::DebugUtils::PicaTraceOwner;
+    if (!Pica::DebugUtils::IsPicaTracing(PicaTraceOwner::Qt)) {
+        if (Pica::DebugUtils::StartPicaTracing(PicaTraceOwner::Qt)) {
+            toggle_tracing->setText(tr("Finish Tracing"));
+        } else {
+            toggle_tracing->setText(tr("Tracing in use by RPC"));
+        }
     } else {
-        pica_trace = Pica::DebugUtils::FinishPicaTracing();
+        pica_trace = Pica::DebugUtils::FinishPicaTracing(PicaTraceOwner::Qt);
+        if (!pica_trace) {
+            toggle_tracing->setText(tr("Start Tracing"));
+            return;
+        }
         emit TracingFinished(*pica_trace);
         toggle_tracing->setText(pica_trace->truncated ? tr("Start Tracing (last was truncated)")
                                                        : tr("Start Tracing"));

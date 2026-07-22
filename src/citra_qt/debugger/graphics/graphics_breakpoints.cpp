@@ -13,6 +13,7 @@
 #include <QMetaType>
 #include <QPushButton>
 #include <QSpinBox>
+#include <QStandardItemModel>
 #include <QTreeView>
 #include <QVBoxLayout>
 #include "citra_qt/debugger/dock_workspace.h"
@@ -348,7 +349,11 @@ void GraphicsBreakPointsWidget::LoadCondition(const QModelIndex& index) {
     if (!index.isValid() || !context) {
         return;
     }
-    const auto condition = context->GetBreakpointCondition(static_cast<Event>(index.row()));
+    const auto event = static_cast<Event>(index.row());
+    const bool command_event = event == Event::PicaCommandLoaded ||
+                               event == Event::PicaCommandProcessed;
+    static_cast<QStandardItemModel*>(condition_field->model())->item(1)->setEnabled(command_event);
+    const auto condition = context->GetBreakpointCondition(event);
     condition_field->setCurrentIndex(
         std::max(condition_field->findData(static_cast<u32>(condition.field)), 0));
     condition_value->setText(QStringLiteral("0x%1").arg(condition.value, 8, 16, QLatin1Char('0')));
@@ -369,6 +374,12 @@ void GraphicsBreakPointsWidget::ApplyCondition() {
     Pica::DebugContext::BreakPointCondition condition{};
     condition.field =
         static_cast<Pica::DebugContext::ConditionField>(condition_field->currentData().toUInt());
+    const auto event = static_cast<Event>(index.row());
+    if (condition.field == Pica::DebugContext::ConditionField::EventData &&
+        event != Event::PicaCommandLoaded && event != Event::PicaCommandProcessed) {
+        condition_error->setText(tr("Pica command register is only available for command events."));
+        return;
+    }
     if (condition.field != Pica::DebugContext::ConditionField::None) {
         bool value_ok{};
         bool mask_ok{};
@@ -416,6 +427,7 @@ void GraphicsBreakPointsWidget::OnBreakPointHit(Pica::DebugContext::Event event,
     capture_button->setEnabled(true);
     resume_button->setEnabled(true);
     frame_advance_button->setEnabled(true);
+    LoadCondition(breakpoint_list->currentIndex());
 }
 
 void GraphicsBreakPointsWidget::OnPicaResume() {

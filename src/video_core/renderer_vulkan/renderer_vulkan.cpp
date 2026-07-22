@@ -1180,7 +1180,7 @@ void RendererVulkan::SwapBuffers() {
 }
 
 void RendererVulkan::RenderScreenshot() {
-    if (!settings.screenshot_requested.exchange(false)) {
+    if (!settings.screenshot_requested) {
         return;
     }
 
@@ -1188,7 +1188,9 @@ void RendererVulkan::RenderScreenshot() {
         RenderScreenshotWithStagingCopy();
     }
 
-    settings.screenshot_complete_callback(false);
+    auto completed = std::move(settings.screenshot_complete_callback);
+    settings.screenshot_requested = false;
+    completed(false);
 }
 
 void RendererVulkan::RenderScreenshotWithStagingCopy() {

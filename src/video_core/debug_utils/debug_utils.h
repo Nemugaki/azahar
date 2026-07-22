@@ -308,12 +308,18 @@ struct PicaTrace {
 
 extern std::atomic_bool g_is_pica_tracing;
 
-void StartPicaTracing();
+enum class PicaTraceOwner {
+    Qt,
+    RPC,
+};
+
+bool StartPicaTracing(PicaTraceOwner owner);
 inline bool IsPicaTracing() {
     return g_is_pica_tracing;
 }
+bool IsPicaTracing(PicaTraceOwner owner);
 void OnPicaRegWrite(u16 cmd_id, u16 mask, u32 value);
-std::unique_ptr<PicaTrace> FinishPicaTracing();
+std::unique_ptr<PicaTrace> FinishPicaTracing(PicaTraceOwner owner);
 
 } // namespace DebugUtils
 

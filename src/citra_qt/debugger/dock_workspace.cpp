@@ -3,6 +3,7 @@
 
 #include <QDockWidget>
 #include <QHBoxLayout>
+#include <QLayout>
 #include <QPushButton>
 #include <QVBoxLayout>
 #include <QVariant>
@@ -42,10 +43,6 @@ void ApplyDockState(QDockWidget* dock) {
     dock->widget()->setEnabled(true);
     toggle->setEnabled(true);
     content->setEnabled(active);
-    content->setUpdatesEnabled(active);
-    if (active) {
-        content->update();
-    }
 
     auto* handler = static_cast<ActiveHandler*>(dock->property(HandlerProperty).value<QObject*>());
     if (handler && handler->callback) {
@@ -77,10 +74,12 @@ void ConfigureDockWorkspace(QDockWidget* dock) {
     dock->setAllowedAreas(Qt::AllDockWidgetAreas);
     dock->setFeatures(QDockWidget::DockWidgetClosable | QDockWidget::DockWidgetMovable |
                       QDockWidget::DockWidgetFloatable);
-    dock->setWindowModality(Qt::NonModal);
+    dock->setMinimumSize(1, 1);
+    content->setMinimumSize(0, 0);
 
     auto* container = new QWidget(dock);
     auto* layout = new QVBoxLayout(container);
+    layout->setSizeConstraint(QLayout::SetNoConstraint);
     auto* controls = new QHBoxLayout;
     auto* toggle = new QPushButton(QObject::tr("Disable"), container);
     toggle->setAccessibleName(QObject::tr("Enable or disable %1").arg(dock->windowTitle()));
@@ -102,13 +101,6 @@ void ConfigureDockWorkspace(QDockWidget* dock) {
     QObject::connect(toggle, &QPushButton::clicked, dock, [dock] {
         dock->setProperty(EnabledProperty, !dock->property(EnabledProperty).toBool());
         ApplyDockState(dock);
-    });
-    QObject::connect(dock, &QDockWidget::topLevelChanged, dock, [dock](bool floating) {
-        if (floating) {
-            // A floating debugger is a normal peer window, never a disabled/modal transient.
-            dock->setWindowModality(Qt::NonModal);
-            dock->setEnabled(true);
-        }
     });
     ApplyDockState(dock);
 }

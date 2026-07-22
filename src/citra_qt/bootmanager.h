@@ -163,7 +163,8 @@ public:
     /// Destroy the previous run's child_widget which should also destroy the child_window
     void ReleaseRenderTarget();
 
-    void CaptureScreenshot(u32 res_scale, const QString& screenshot_path);
+    bool CaptureScreenshot(u32 res_scale, const QString& screenshot_path,
+                           std::function<void(bool)> completed = {});
 
     std::pair<u32, u32> ScaleTouch(const QPointF pos) const;
 
@@ -213,8 +214,6 @@ private:
     /// should instead be shared from
     static std::unique_ptr<Frontend::GraphicsContext> main_context;
 
-    /// Temporary storage of the screenshot taken
-    QImage screenshot_image;
     QByteArray geometry;
     bool first_frame = false;
     bool has_focus = false;

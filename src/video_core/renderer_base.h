@@ -101,7 +101,7 @@ public:
     [[nodiscard]] bool IsScreenshotPending() const;
 
     /// Request a screenshot of the next frame
-    void RequestScreenshot(void* data, std::function<void(bool)> callback,
+    bool RequestScreenshot(void* data, std::function<void(bool)> callback,
                            const Layout::FramebufferLayout& layout);
 
 protected:

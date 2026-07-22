@@ -423,16 +423,25 @@ void DumpShader(const std::string& filename, const ShaderRegs& config, const Sha
 
 static std::unique_ptr<PicaTrace> pica_trace;
 static std::mutex pica_trace_mutex;
+static std::optional<PicaTraceOwner> pica_trace_owner;
 std::atomic_bool g_is_pica_tracing = false;
 
-void StartPicaTracing() {
+bool StartPicaTracing(PicaTraceOwner owner) {
     std::lock_guard lock(pica_trace_mutex);
-    if (g_is_pica_tracing.exchange(true)) {
+    if (pica_trace_owner) {
         LOG_WARNING(HW_GPU, "StartPicaTracing called even though tracing already running!");
-        return;
+        return false;
     }
 
     pica_trace = std::make_unique<PicaTrace>();
+    pica_trace_owner = owner;
+    g_is_pica_tracing = true;
+    return true;
+}
+
+bool IsPicaTracing(PicaTraceOwner owner) {
+    std::lock_guard lock(pica_trace_mutex);
+    return pica_trace_owner == owner;
 }
 
 void OnPicaRegWrite(u16 cmd_id, u16 mask, u32 value) {
@@ -455,14 +464,14 @@ void OnPicaRegWrite(u16 cmd_id, u16 mask, u32 value) {
     }
 }
 
-std::unique_ptr<PicaTrace> FinishPicaTracing() {
-    if (!g_is_pica_tracing.exchange(false)) {
-        LOG_WARNING(HW_GPU, "FinishPicaTracing called even though tracing isn't running!");
+std::unique_ptr<PicaTrace> FinishPicaTracing(PicaTraceOwner owner) {
+    std::lock_guard lock(pica_trace_mutex);
+    if (pica_trace_owner != owner) {
+        LOG_WARNING(HW_GPU, "FinishPicaTracing called by a non-owner");
         return {};
     }
-
-    // Wait until running tracing is finished
-    std::lock_guard lock(pica_trace_mutex);
+    g_is_pica_tracing = false;
+    pica_trace_owner.reset();
     std::unique_ptr<PicaTrace> ret(std::move(pica_trace));
 
     return ret;
