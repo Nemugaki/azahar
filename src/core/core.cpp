@@ -279,12 +279,13 @@ std::optional<ARM_Interface::RegisterSnapshot> System::GetDebugCaptureCore(u32 i
 }
 
 #ifdef ENABLE_SCRIPTING
-void System::StartRPCServer(RPC::EmulationControlHandler emulation_control_handler,
+bool System::StartRPCServer(RPC::EmulationControlHandler emulation_control_handler,
                             RPC::ClientCountHandler client_count_handler) {
     if (!rpc_server) {
         rpc_server = std::make_unique<RPC::Server>(*this, std::move(emulation_control_handler),
                                                    std::move(client_count_handler));
     }
+    return rpc_server->IsListening();
 }
 
 void System::StopRPCServer() {

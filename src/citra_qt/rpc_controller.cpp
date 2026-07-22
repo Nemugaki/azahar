@@ -24,9 +24,7 @@ RPCController::RPCController(GMainWindow& main_window_, Core::System& system_)
     indicator->setToolTip(
         tr("RPC server on 127.0.0.1:%1 (loopback only)").arg(Core::RPC::GetRPCPort()));
     main_window.statusBar()->addPermanentWidget(indicator);
-    UpdateIndicator();
-
-    system.StartRPCServer(
+    listening = system.StartRPCServer(
         [this](Core::RPC::EmulationControl operation, const std::string& path) {
             return HandleEmulationControl(operation, path);
         },
@@ -39,6 +37,7 @@ RPCController::RPCController(GMainWindow& main_window_, Core::System& system_)
                 },
                 Qt::QueuedConnection);
         });
+    UpdateIndicator();
 }
 
 RPCController::~RPCController() {
@@ -228,9 +227,11 @@ void RPCController::DrainRequests() {
 }
 
 void RPCController::UpdateIndicator() {
-    indicator->setText(tr("RPC: Listening at %1 | %2 active")
-                           .arg(Core::RPC::GetRPCPort())
-                           .arg(active_client_count));
+    indicator->setText(listening ? tr("RPC: Listening at %1 | %2 active")
+                                       .arg(Core::RPC::GetRPCPort())
+                                       .arg(active_client_count)
+                                 : tr("RPC: Failed to listen at %1")
+                                       .arg(Core::RPC::GetRPCPort()));
     indicator->setToolTip(
         tr("RPC server on 127.0.0.1:%1 (loopback only)\n%2 clients active in the last 10 seconds\n%3 frontend requests handled")
             .arg(Core::RPC::GetRPCPort())

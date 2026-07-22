@@ -61,11 +61,14 @@ private:
     void SendError(Packet& packet, Error error) const;
     void HandleSingleRequest(std::unique_ptr<Packet> request);
     void HandleRequestsLoop(std::stop_token stop_token);
+    void HandleWaitRequestsLoop(std::stop_token stop_token);
 
 private:
     Core::System& system;
     Common::SPSCQueue<std::unique_ptr<Packet>, true> request_queue;
+    Common::SPSCQueue<std::unique_ptr<Packet>, true> wait_request_queue;
     std::jthread request_handler_thread;
+    std::jthread wait_request_handler_thread;
     EmulationControlHandler emulation_control_handler;
     u32 selected_pid = 0xFFFFFFFF;
     std::vector<u8> pica_trace_data;

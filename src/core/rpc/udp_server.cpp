@@ -5,6 +5,8 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdlib>
+#include <deque>
+#include <mutex>
 #include <thread>
 #include <vector>
 #include <boost/asio.hpp>
@@ -32,8 +34,6 @@ class UDPServer::Impl {
 public:
     Impl(std::function<void(std::unique_ptr<Packet>)> new_request_callback,
          ClientCountHandler client_count_handler_)
-        // Use a random high port
-        // TODO: Make configurable or increment port number on failure
         : socket(io_context, boost::asio::ip::udp::endpoint(boost::asio::ip::address_v4::loopback(),
                                                             GetRPCPort())),
           client_timer(io_context), new_request_callback(std::move(new_request_callback)),
@@ -64,13 +64,17 @@ private:
             PacketHeader header;
             std::memcpy(&header, request_buffer.data(), sizeof(header));
             if ((size - MIN_PACKET_SIZE) == header.packet_size) {
+                TouchClient(remote_endpoint);
+                if (SendCachedReply(header, remote_endpoint)) {
+                    StartReceive();
+                    return;
+                }
                 u8* data = request_buffer.data() + MIN_PACKET_SIZE;
                 std::function<void(Packet&)> send_reply_callback =
                     std::bind(&Impl::SendReply, this, remote_endpoint, std::placeholders::_1);
                 std::unique_ptr<Packet> new_packet =
                     std::make_unique<Packet>(header, data, send_reply_callback);
 
-                TouchClient(remote_endpoint);
                 // Send the request to the upper layer for handling
                 new_request_callback(std::move(new_packet));
             }
@@ -127,6 +131,17 @@ private:
         std::memcpy(reply_buffer.data() + (4 * sizeof(u32)), reply_packet.GetPacketData().data(),
                     reply_packet.GetPacketDataSize());
 
+        {
+            std::lock_guard lock{reply_cache_mutex};
+            const auto now = std::chrono::steady_clock::now();
+            while (!reply_cache.empty() &&
+                   (reply_cache.size() >= 128 || now - reply_cache.front().created >=
+                                                   std::chrono::seconds(10))) {
+                reply_cache.pop_front();
+            }
+            reply_cache.push_back({endpoint, reply_header, reply_buffer, now});
+        }
+
         boost::system::error_code error;
         socket.send_to(boost::asio::buffer(reply_buffer), endpoint, 0, error);
 
@@ -137,6 +152,21 @@ private:
                      reply_packet.GetVersion(), reply_packet.GetId(), reply_packet.GetPacketType(),
                      reply_packet.GetPacketDataSize());
         }
+    }
+
+    bool SendCachedReply(const PacketHeader& header,
+                         const boost::asio::ip::udp::endpoint& endpoint) {
+        std::lock_guard lock{reply_cache_mutex};
+        const auto reply = std::ranges::find_if(reply_cache, [&](const auto& entry) {
+            return entry.endpoint == endpoint && entry.header.version == header.version &&
+                   entry.header.id == header.id && entry.header.packet_type == header.packet_type;
+        });
+        if (reply == reply_cache.end()) {
+            return false;
+        }
+        boost::system::error_code error;
+        socket.send_to(boost::asio::buffer(reply->data), endpoint, 0, error);
+        return !error;
     }
 
     std::thread worker_thread;
@@ -154,6 +184,14 @@ private:
         std::chrono::steady_clock::time_point last_seen;
     };
     std::vector<Client> clients;
+    struct CachedReply {
+        boost::asio::ip::udp::endpoint endpoint;
+        PacketHeader header;
+        std::vector<u8> data;
+        std::chrono::steady_clock::time_point created;
+    };
+    std::mutex reply_cache_mutex;
+    std::deque<CachedReply> reply_cache;
 };
 
 UDPServer::UDPServer(std::function<void(std::unique_ptr<Packet>)> new_request_callback,

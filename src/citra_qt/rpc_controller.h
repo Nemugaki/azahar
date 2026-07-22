@@ -49,6 +49,7 @@ private:
     std::condition_variable request_completed;
     std::deque<std::shared_ptr<Request>> requests;
     bool stopping{};
+    bool listening{};
     u64 request_count{};
     u32 active_client_count{};
 };

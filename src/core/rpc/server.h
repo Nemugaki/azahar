@@ -22,6 +22,10 @@ public:
            ClientCountHandler client_count_handler);
     ~Server();
 
+    bool IsListening() const {
+        return udp_server != nullptr;
+    }
+
     void NewRequestCallback(std::unique_ptr<Packet> new_request);
 
 private:

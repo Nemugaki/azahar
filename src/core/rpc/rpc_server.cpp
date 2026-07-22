@@ -41,11 +41,15 @@ RPCServer::RPCServer(Core::System& system_, EmulationControlHandler emulation_co
     LOG_INFO(RPC_Server, "Starting RPC server.");
     request_handler_thread =
         std::jthread([this](std::stop_token stop_token) { HandleRequestsLoop(stop_token); });
+    wait_request_handler_thread =
+        std::jthread([this](std::stop_token stop_token) { HandleWaitRequestsLoop(stop_token); });
 }
 
 RPCServer::~RPCServer() {
     request_handler_thread.request_stop();
+    wait_request_handler_thread.request_stop();
     request_handler_thread.join();
+    wait_request_handler_thread.join();
     if (pica_trace_owned && Pica::DebugUtils::IsPicaTracing()) {
         Pica::DebugUtils::FinishPicaTracing();
     }
@@ -173,7 +177,7 @@ u32 RPCServer::GetEnabledCapabilities() const {
         return 0;
     }
 
-    u32 capabilities = CAPABILITY_ERROR_REPLIES;
+    u32 capabilities = CAPABILITY_ERROR_REPLIES | CAPABILITY_REQUEST_DEDUPLICATION;
     if (Settings::values.rpc_allow_memory.GetValue()) {
         capabilities |= CAPABILITY_MEMORY_ACCESS;
     }
@@ -485,8 +489,6 @@ void RPCServer::HandleCPURegisters(Packet& packet, u32 core, u32 bank, u32 start
 
 void RPCServer::HandleDebugState(Packet& packet, DebugStateOperation operation,
                                  u32 after_generation, u32 timeout_ms, u32 reason_mask) {
-    // NOTE: Waits occupy the single RPC worker. Dispatch waiters separately if concurrent commands
-    // during a wait become a real workflow.
     const auto state = operation == DebugStateOperation::Wait
                            ? system.WaitForDebugState(after_generation, timeout_ms, reason_mask)
                            : system.GetDebugState();
@@ -1030,7 +1032,23 @@ void RPCServer::HandleRequestsLoop(std::stop_token stop_token) {
     }
 }
 
+void RPCServer::HandleWaitRequestsLoop(std::stop_token stop_token) {
+    std::unique_ptr<RPC::Packet> request_packet;
+    while ((request_packet = wait_request_queue.PopWait(stop_token))) {
+        HandleSingleRequest(std::move(request_packet));
+    }
+}
+
 void RPCServer::QueueRequest(std::unique_ptr<RPC::Packet> request) {
+    if (request && request->GetPacketType() == PacketType::DebugState &&
+        request->GetPacketDataSize() >= sizeof(u32)) {
+        u32 operation{};
+        std::memcpy(&operation, request->GetPacketData().data(), sizeof(operation));
+        if (operation == static_cast<u32>(DebugStateOperation::Wait)) {
+            wait_request_queue.Push(std::move(request));
+            return;
+        }
+    }
     request_queue.Push(std::move(request));
 }
 

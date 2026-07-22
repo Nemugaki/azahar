@@ -450,7 +450,7 @@ public:
     std::optional<ARM_Interface::RegisterSnapshot> GetDebugCaptureCore(u32 id, u32 core) const;
 
 #ifdef ENABLE_SCRIPTING
-    void StartRPCServer(RPC::EmulationControlHandler emulation_control_handler,
+    bool StartRPCServer(RPC::EmulationControlHandler emulation_control_handler,
                         RPC::ClientCountHandler client_count_handler);
     void StopRPCServer();
 #endif
