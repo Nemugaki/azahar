@@ -4,6 +4,8 @@ To whomever may be curious enough, this is my personal Azahar branch, it has a c
 with AI, as I am not knowledged enough regarding the ins and outs of emulator itself, or the 3DS GPU, to fit my needs, these being automation, scripts, debugging
 and allowing programs such as AI agents access to the emulator state to help with debugging.
 
+I eventually lost the plot and just added too many features, including overhauling existing debug features for my convenience and usage.
+
 The main features are:
 
 - Expanded and improved RPC. It is now what some people call "first class".
@@ -13,6 +15,8 @@ The main features are:
   - Exposes dedicated Pica breakpoint resume as well as normal and CPU-debug resume controls.
   - Reports a unified pause reason and supports blocking waits, so scripts can synchronize with user, CPU, Pica, and frame-advance pauses without polling.
   - Creates atomic, bounded ARM/Pica captures and compact byte-level diffs for comparing debugger states.
+  - Uses protocol v2 validation and explicit error replies, separates memory reads from default-off guest-memory writes, retries requests safely, and reports bind failures.
+  - Lists, pins, deletes, and reports cache use for immutable debugger captures; paged Pica snapshot generations remain readable while newer captures arrive.
   - Supports savestate loading and saving by slot, plus screenshots to a chosen output path.
   - Reports connected client count and supports a configurable port for running multiple instances.
   - Gates memory, CPU, Pica, savestate, screenshot, and emulator-control access independently in the UI.
@@ -21,9 +25,12 @@ The main features are:
   - Structured conditional Pica breakpoint editing with field, value, mask, validation, and current-value helpers.
   - A searchable, frame-grouped render timeline labels draw mode, topology, vertex counts, shader entry points, target changes, and links to color/depth inspection.
   - Configurable capture memory and timeline frame limits evict the oldest debugger history before it can grow without bound.
+  - One-shot, skip-count, hit-count, enable-all, and disable-all Pica breakpoint controls.
+  - Surface channel/alpha views and raw export, shader entry-point navigation and raw words, and command-register before/after deltas.
   - Shared current color/depth render-target inspection in the surface viewer.
   - Per-core ARM register selection with unavailable-state reporting and previous-capture change highlighting.
 - Fixed an issue that CiTrace *apparently* had an issue since a GPU refactor from 2023.
+- CiTrace and command histories are bounded by the debugger cache limit; incomplete traces are identified instead of silently saved.
 
 
 
