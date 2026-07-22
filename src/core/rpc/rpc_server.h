@@ -39,10 +39,13 @@ private:
     void HandlePicaSnapshot(Packet& packet, PicaSnapshotOperation operation, u32 generation,
                             u32 offset, u32 size);
     void HandlePicaBreakpoint(Packet& packet, PicaBreakpointOperation operation, u32 event,
-                              u32 enabled);
+                              u32 argument, u32 value, u32 mask);
+    void HandlePicaTimeline(Packet& packet, PicaTimelineOperation operation, u32 start, u32 count,
+                            u32 kind, u32 required_changes);
+    void HandlePicaRenderTarget(Packet& packet);
     void HandlePicaTrace(Packet& packet, PicaTraceOperation operation, u32 generation, u32 start,
                          u32 count, u32 register_id);
-    void HandleCPURegisters(Packet& packet, u32 bank, u32 start, u32 count);
+    void HandleCPURegisters(Packet& packet, u32 core, u32 bank, u32 start, u32 count);
     void HandleGXCommandTrace(Packet& packet, GXCommandTraceOperation operation, u32 start,
                               u32 count, u32 command_id);
     void HandlePicaShader(Packet& packet, PicaShaderOperation operation, u32 generation, u32 start,

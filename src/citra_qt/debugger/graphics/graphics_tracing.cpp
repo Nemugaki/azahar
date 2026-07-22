@@ -11,6 +11,7 @@
 #include <QFileDialog>
 #include <QMessageBox>
 #include <QPushButton>
+#include <QTableWidget>
 #include <nihstro/float24.h>
 #include "citra_qt/debugger/graphics/graphics_tracing.h"
 #include "common/common_types.h"
@@ -22,7 +23,7 @@
 GraphicsTracingWidget::GraphicsTracingWidget(Core::System& system_,
                                              std::shared_ptr<Pica::DebugContext> debug_context,
                                              QWidget* parent)
-    : BreakPointObserverDock(debug_context, tr("CiTrace Recorder"), parent), system{system_} {
+    : BreakPointObserverDock(debug_context, tr("Pica Trace & Timeline"), parent), system{system_} {
 
     setObjectName(QStringLiteral("CiTracing"));
 
@@ -30,6 +31,13 @@ GraphicsTracingWidget::GraphicsTracingWidget(Core::System& system_,
     QPushButton* stop_recording =
         new QPushButton(QIcon::fromTheme(QStringLiteral("document-save")), tr("Stop and Save"));
     QPushButton* abort_recording = new QPushButton(tr("Abort Recording"));
+    auto* refresh_timeline = new QPushButton(tr("Refresh Timeline"));
+    timeline = new QTableWidget;
+    timeline->setColumnCount(8);
+    timeline->setHorizontalHeaderLabels(
+        {tr("#"), tr("Kind"), tr("Frame"), tr("Draw"), tr("Changed"), tr("Color"),
+         tr("Depth"), tr("Size")});
+    timeline->setEditTriggers(QAbstractItemView::NoEditTriggers);
 
     connect(this, &GraphicsTracingWidget::SetStartTracingButtonEnabled, start_recording,
             &QPushButton::setVisible);
@@ -40,19 +48,24 @@ GraphicsTracingWidget::GraphicsTracingWidget(Core::System& system_,
     connect(start_recording, &QPushButton::clicked, this, &GraphicsTracingWidget::StartRecording);
     connect(stop_recording, &QPushButton::clicked, this, &GraphicsTracingWidget::StopRecording);
     connect(abort_recording, &QPushButton::clicked, this, &GraphicsTracingWidget::AbortRecording);
+    connect(refresh_timeline, &QPushButton::clicked, this, &GraphicsTracingWidget::RefreshTimeline);
 
     stop_recording->setVisible(false);
     abort_recording->setVisible(false);
 
     auto main_widget = new QWidget;
     auto main_layout = new QVBoxLayout;
+    recording_controls = new QWidget;
     {
         auto sub_layout = new QHBoxLayout;
         sub_layout->addWidget(start_recording);
         sub_layout->addWidget(stop_recording);
         sub_layout->addWidget(abort_recording);
-        main_layout->addLayout(sub_layout);
+        recording_controls->setLayout(sub_layout);
+        main_layout->addWidget(recording_controls);
     }
+    main_layout->addWidget(refresh_timeline);
+    main_layout->addWidget(timeline);
     main_widget->setLayout(main_layout);
     setWidget(main_widget);
 }
@@ -144,16 +157,49 @@ void GraphicsTracingWidget::AbortRecording() {
 }
 
 void GraphicsTracingWidget::OnBreakPointHit(Pica::DebugContext::Event event, const void* data) {
-    widget()->setEnabled(true);
+    RefreshTimeline();
+    recording_controls->setEnabled(true);
+}
+
+void GraphicsTracingWidget::RefreshTimeline() {
+    auto context = context_weak.lock();
+    if (!context) {
+        return;
+    }
+    const auto entries = context->GetTimeline(UINT32_MAX, 128,
+                                              Pica::DebugContext::TimelineKind::Draw, false);
+    timeline->setRowCount(static_cast<int>(entries.size()));
+    for (int row = 0; row < static_cast<int>(entries.size()); ++row) {
+        const auto& entry = entries[row];
+        const QString changed = QStringLiteral("%1%2%3%4")
+                                    .arg(entry.changed_mask & 1 ? QStringLiteral("C") : QString{})
+                                    .arg(entry.changed_mask & 2 ? QStringLiteral("D") : QString{})
+                                    .arg(entry.changed_mask & 4 ? QStringLiteral("S") : QString{})
+                                    .arg(entry.changed_mask & 8 ? QStringLiteral("F") : QString{});
+        const QStringList values{
+            QString::number(entry.sequence),
+            entry.kind == Pica::DebugContext::TimelineKind::Draw ? tr("Draw") : tr("Frame"),
+            QString::number(entry.frame),
+            QString::number(entry.draw),
+            changed,
+            QStringLiteral("0x%1").arg(entry.target.color_address, 8, 16, QLatin1Char('0')),
+            QStringLiteral("0x%1").arg(entry.target.depth_address, 8, 16, QLatin1Char('0')),
+            QStringLiteral("%1x%2").arg(entry.target.width).arg(entry.target.height),
+        };
+        for (int column = 0; column < values.size(); ++column) {
+            timeline->setItem(row, column, new QTableWidgetItem(values[column]));
+        }
+    }
+    timeline->resizeColumnsToContents();
 }
 
 void GraphicsTracingWidget::OnResumed() {
-    widget()->setEnabled(false);
+    recording_controls->setEnabled(false);
 }
 
 void GraphicsTracingWidget::OnEmulationStarting(EmuThread* emu_thread) {
     // Disable tracing starting/stopping until a GPU breakpoint is reached
-    widget()->setEnabled(false);
+    recording_controls->setEnabled(false);
 }
 
 void GraphicsTracingWidget::OnEmulationStopping() {
@@ -177,7 +223,5 @@ void GraphicsTracingWidget::OnEmulationStopping() {
         }
     }
 
-    // If the widget was disabled before, enable it now to allow starting
-    // tracing before starting the next emulation session
-    widget()->setEnabled(true);
+    recording_controls->setEnabled(true);
 }

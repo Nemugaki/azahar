@@ -212,7 +212,10 @@ bool RPCServer::IsPacketTypeEnabled(PacketType packet_type) const {
     case PacketType::PicaBreakpoint:
         return capabilities & CAPABILITY_PICA_BREAKPOINT;
     case PacketType::PicaTrace:
+    case PacketType::PicaTimeline:
         return capabilities & CAPABILITY_PICA_TRACE;
+    case PacketType::PicaRenderTarget:
+        return capabilities & CAPABILITY_PICA_SNAPSHOT;
     case PacketType::PicaShader:
         return capabilities & CAPABILITY_PICA_SHADER;
     default:
@@ -234,7 +237,7 @@ bool RPCServer::IsEmulationControlEnabled(EmulationControl operation) const {
 }
 
 void RPCServer::HandlePicaBreakpoint(Packet& packet, PicaBreakpointOperation operation, u32 event,
-                                     u32 enabled) {
+                                     u32 argument, u32 value, u32 mask) {
     const auto context = Pica::g_debug_context;
     if (!context) {
         packet.SetPacketDataSize(0);
@@ -243,17 +246,95 @@ void RPCServer::HandlePicaBreakpoint(Packet& packet, PicaBreakpointOperation ope
     }
     if (operation == PicaBreakpointOperation::Set &&
         event < static_cast<u32>(Pica::DebugContext::Event::NumEvents)) {
-        context->SetBreakpoint(static_cast<Pica::DebugContext::Event>(event), enabled != 0);
+        context->SetBreakpoint(static_cast<Pica::DebugContext::Event>(event), argument != 0);
     } else if (operation == PicaBreakpointOperation::Resume) {
         context->Resume();
     } else if (operation == PicaBreakpointOperation::Clear) {
         context->ClearBreakpoints();
+    } else if ((operation == PicaBreakpointOperation::SetCondition ||
+                operation == PicaBreakpointOperation::GetCondition) &&
+               event < static_cast<u32>(Pica::DebugContext::Event::NumEvents)) {
+        if (operation == PicaBreakpointOperation::SetCondition) {
+            if (argument > static_cast<u32>(Pica::DebugContext::ConditionField::FrameIndex)) {
+                packet.SetPacketDataSize(0);
+                packet.SendReply();
+                return;
+            }
+            context->SetBreakpointCondition(
+                static_cast<Pica::DebugContext::Event>(event),
+                {static_cast<Pica::DebugContext::ConditionField>(argument), value, mask});
+        }
+        const auto condition =
+            context->GetBreakpointCondition(static_cast<Pica::DebugContext::Event>(event));
+        const PicaBreakpointConditionReply reply{static_cast<u32>(condition.field),
+                                                  condition.value, condition.mask};
+        std::memcpy(packet.GetPacketData().data(), &reply, sizeof(reply));
+        packet.SetPacketDataSize(sizeof(reply));
+        packet.SendReply();
+        return;
     }
     const auto state = context->GetBreakpointState();
     const PicaBreakpointReply reply{state.enabled_mask, static_cast<u32>(state.active),
                                     state.at_breakpoint};
     std::memcpy(packet.GetPacketData().data(), &reply, sizeof(reply));
     packet.SetPacketDataSize(sizeof(reply));
+    packet.SendReply();
+}
+
+void RPCServer::HandlePicaTimeline(Packet& packet, PicaTimelineOperation operation, u32 start,
+                                   u32 count, u32 kind, u32 required_changes) {
+    const auto context = Pica::g_debug_context;
+    if (!context) {
+        packet.SetPacketDataSize(0);
+        packet.SendReply();
+        return;
+    }
+    if (operation == PicaTimelineOperation::Clear) {
+        context->ClearTimeline();
+    } else if (operation == PicaTimelineOperation::Read) {
+        const u32 max_entries = (MAX_PACKET_DATA_SIZE - sizeof(u32)) / sizeof(PicaTimelineEntry);
+        const bool filter_kind = kind <= static_cast<u32>(Pica::DebugContext::TimelineKind::Frame);
+        const auto entries = context->GetTimeline(
+            start, std::min(count, max_entries),
+            static_cast<Pica::DebugContext::TimelineKind>(filter_kind ? kind : 0), filter_kind,
+            required_changes);
+        const u32 returned = static_cast<u32>(entries.size());
+        std::memcpy(packet.GetPacketData().data(), &returned, sizeof(returned));
+        for (u32 i = 0; i < returned; ++i) {
+            const auto& source = entries[i];
+            const PicaTimelineEntry target{
+                source.sequence,
+                static_cast<u32>(source.kind),
+                source.frame,
+                source.draw,
+                source.changed_mask,
+                {source.target.color_address, source.target.depth_address, source.target.width,
+                 source.target.height, source.target.color_format, source.target.depth_format}};
+            std::memcpy(packet.GetPacketData().data() + sizeof(returned) + i * sizeof(target),
+                        &target, sizeof(target));
+        }
+        packet.SetPacketDataSize(sizeof(returned) + returned * sizeof(PicaTimelineEntry));
+        packet.SendReply();
+        return;
+    }
+    const u32 total = context->GetTimelineCount();
+    std::memcpy(packet.GetPacketData().data(), &total, sizeof(total));
+    packet.SetPacketDataSize(sizeof(total));
+    packet.SendReply();
+}
+
+void RPCServer::HandlePicaRenderTarget(Packet& packet) {
+    const auto context = Pica::g_debug_context;
+    if (!context) {
+        packet.SetPacketDataSize(0);
+    } else {
+        const auto target = context->GetRenderTargetInfo();
+        const PicaRenderTargetReply reply{target.color_address, target.depth_address, target.width,
+                                          target.height, target.color_format,
+                                          target.depth_format};
+        std::memcpy(packet.GetPacketData().data(), &reply, sizeof(reply));
+        packet.SetPacketDataSize(sizeof(reply));
+    }
     packet.SendReply();
 }
 
@@ -323,14 +404,19 @@ void RPCServer::HandlePicaTrace(Packet& packet, PicaTraceOperation operation, u3
     packet.SendReply();
 }
 
-void RPCServer::HandleCPURegisters(Packet& packet, u32 bank, u32 start, u32 count) {
+void RPCServer::HandleCPURegisters(Packet& packet, u32 core, u32 bank, u32 start, u32 count) {
     if (!system.IsPoweredOn() || !system.IsCPUHalted()) {
         packet.SetPacketDataSize(0);
         packet.SendReply();
         return;
     }
 
-    const auto snapshot = system.GetCore(0).GetRegisterSnapshot();
+    if (core >= system.GetNumCores()) {
+        packet.SetPacketDataSize(0);
+        packet.SendReply();
+        return;
+    }
+    const auto snapshot = system.GetCore(core).GetRegisterSnapshot();
     const u32 bank_size = bank == 0   ? snapshot.core.size()
                           : bank == 1 ? snapshot.vfp.size()
                           : bank == 2 ? 3
@@ -585,6 +671,8 @@ bool RPCServer::ValidatePacket(const PacketHeader& packet_header) {
         case PacketType::CPURegisters:
         case PacketType::GXCommandTrace:
         case PacketType::PicaShader:
+        case PacketType::PicaTimeline:
+        case PacketType::PicaRenderTarget:
             return packet_header.packet_size >= sizeof(u32);
         default:
             break;
@@ -665,14 +753,44 @@ void RPCServer::HandleSingleRequest(std::unique_ptr<Packet> request_packet) {
         }
         case PacketType::PicaBreakpoint: {
             u32 arg3 = 0;
+            u32 arg4 = 0;
+            u32 arg5 = UINT32_MAX;
             if (request_packet->GetPacketDataSize() >= 3 * sizeof(u32)) {
                 std::memcpy(&arg3, packet_data.data() + 2 * sizeof(u32), sizeof(arg3));
             }
+            if (request_packet->GetPacketDataSize() >= 4 * sizeof(u32)) {
+                std::memcpy(&arg4, packet_data.data() + 3 * sizeof(u32), sizeof(arg4));
+            }
+            if (request_packet->GetPacketDataSize() >= 5 * sizeof(u32)) {
+                std::memcpy(&arg5, packet_data.data() + 4 * sizeof(u32), sizeof(arg5));
+            }
             HandlePicaBreakpoint(*request_packet, static_cast<PicaBreakpointOperation>(arg1), arg2,
-                                 arg3);
+                                 arg3, arg4, arg5);
             success = true;
             break;
         }
+        case PacketType::PicaTimeline: {
+            u32 arg3 = 20;
+            u32 arg4 = UINT32_MAX;
+            u32 arg5 = 0;
+            if (request_packet->GetPacketDataSize() >= 3 * sizeof(u32)) {
+                std::memcpy(&arg3, packet_data.data() + 2 * sizeof(u32), sizeof(arg3));
+            }
+            if (request_packet->GetPacketDataSize() >= 4 * sizeof(u32)) {
+                std::memcpy(&arg4, packet_data.data() + 3 * sizeof(u32), sizeof(arg4));
+            }
+            if (request_packet->GetPacketDataSize() >= 5 * sizeof(u32)) {
+                std::memcpy(&arg5, packet_data.data() + 4 * sizeof(u32), sizeof(arg5));
+            }
+            HandlePicaTimeline(*request_packet, static_cast<PicaTimelineOperation>(arg1), arg2,
+                               arg3, arg4, arg5);
+            success = true;
+            break;
+        }
+        case PacketType::PicaRenderTarget:
+            HandlePicaRenderTarget(*request_packet);
+            success = true;
+            break;
         case PacketType::PicaTrace: {
             u32 arg3 = 0;
             u32 arg4 = 0;
@@ -695,10 +813,16 @@ void RPCServer::HandleSingleRequest(std::unique_ptr<Packet> request_packet) {
         }
         case PacketType::CPURegisters: {
             u32 arg3 = 1;
+            u32 arg4 = 0;
             if (request_packet->GetPacketDataSize() >= 3 * sizeof(u32)) {
                 std::memcpy(&arg3, packet_data.data() + 2 * sizeof(u32), sizeof(arg3));
             }
-            HandleCPURegisters(*request_packet, arg1, arg2, arg3);
+            if (request_packet->GetPacketDataSize() >= 4 * sizeof(u32)) {
+                std::memcpy(&arg4, packet_data.data() + 3 * sizeof(u32), sizeof(arg4));
+                HandleCPURegisters(*request_packet, arg1, arg2, arg3, arg4);
+            } else {
+                HandleCPURegisters(*request_packet, 0, arg1, arg2, arg3);
+            }
             success = true;
             break;
         }

@@ -16,7 +16,7 @@ BreakPointModel::BreakPointModel(std::shared_ptr<Pica::DebugContext> debug_conte
       active_breakpoint(debug_context->active_breakpoint) {}
 
 int BreakPointModel::columnCount([[maybe_unused]] const QModelIndex& parent) const {
-    return 1;
+    return 2;
 }
 
 int BreakPointModel::rowCount([[maybe_unused]] const QModelIndex& parent) const {
@@ -26,10 +26,46 @@ int BreakPointModel::rowCount([[maybe_unused]] const QModelIndex& parent) const 
 QVariant BreakPointModel::data(const QModelIndex& index, int role) const {
     const auto event = static_cast<Pica::DebugContext::Event>(index.row());
 
+    if (role == Qt::ToolTipRole && index.column() == 1) {
+        return tr("Use always or field=value[/mask]. Fields: command, color, depth, draw, frame.");
+    }
+
     switch (role) {
-    case Qt::DisplayRole: {
+    case Qt::DisplayRole:
+    case Qt::EditRole: {
         if (index.column() == 0) {
             return DebugContextEventToString(event);
+        }
+        if (index.column() == 1) {
+            auto context = context_weak.lock();
+            if (!context) {
+                return {};
+            }
+            const auto condition = context->GetBreakpointCondition(event);
+            if (condition.field == Pica::DebugContext::ConditionField::None) {
+                return tr("always");
+            }
+            const auto field = [condition] {
+                switch (condition.field) {
+                case Pica::DebugContext::ConditionField::EventData:
+                    return QStringLiteral("command");
+                case Pica::DebugContext::ConditionField::ColorBuffer:
+                    return QStringLiteral("color");
+                case Pica::DebugContext::ConditionField::DepthBuffer:
+                    return QStringLiteral("depth");
+                case Pica::DebugContext::ConditionField::DrawIndex:
+                    return QStringLiteral("draw");
+                case Pica::DebugContext::ConditionField::FrameIndex:
+                    return QStringLiteral("frame");
+                case Pica::DebugContext::ConditionField::None:
+                    break;
+                }
+                return QString{};
+            }();
+            return QStringLiteral("%1=0x%2/0x%3")
+                .arg(field)
+                .arg(condition.value, 0, 16)
+                .arg(condition.mask, 0, 16);
         }
         break;
     }
@@ -58,6 +94,13 @@ QVariant BreakPointModel::data(const QModelIndex& index, int role) const {
     return QVariant();
 }
 
+QVariant BreakPointModel::headerData(int section, Qt::Orientation orientation, int role) const {
+    if (orientation != Qt::Horizontal || role != Qt::DisplayRole) {
+        return {};
+    }
+    return section == 0 ? tr("Breakpoint") : tr("Condition");
+}
+
 Qt::ItemFlags BreakPointModel::flags(const QModelIndex& index) const {
     if (!index.isValid()) {
         return {};
@@ -66,6 +109,8 @@ Qt::ItemFlags BreakPointModel::flags(const QModelIndex& index) const {
     Qt::ItemFlags flags = Qt::ItemIsEnabled;
     if (index.column() == 0) {
         flags |= Qt::ItemIsUserCheckable;
+    } else if (index.column() == 1) {
+        flags |= Qt::ItemIsEditable;
     }
 
     return flags;
@@ -86,6 +131,50 @@ bool BreakPointModel::setData(const QModelIndex& index, const QVariant& value, i
         context->SetBreakpoint(event, value == Qt::Checked);
         QModelIndex changed_index = createIndex(index.row(), 0);
         emit dataChanged(changed_index, changed_index);
+        return true;
+    }
+    case Qt::EditRole: {
+        if (index.column() != 1) {
+            return false;
+        }
+        auto context = context_weak.lock();
+        if (!context) {
+            return false;
+        }
+        const QString text = value.toString().trimmed();
+        Pica::DebugContext::BreakPointCondition condition{};
+        if (!text.isEmpty() && text != QStringLiteral("always")) {
+            const auto equals = text.indexOf(QLatin1Char('='));
+            if (equals <= 0) {
+                return false;
+            }
+            const QString field = text.left(equals).trimmed().toLower();
+            const QStringList parts = text.mid(equals + 1).split(QLatin1Char('/'));
+            bool value_ok = false;
+            bool mask_ok = true;
+            condition.value = parts[0].toUInt(&value_ok, 0);
+            if (parts.size() > 1) {
+                condition.mask = parts[1].toUInt(&mask_ok, 0);
+            }
+            if (!value_ok || !mask_ok || parts.size() > 2) {
+                return false;
+            }
+            if (field == QStringLiteral("command")) {
+                condition.field = Pica::DebugContext::ConditionField::EventData;
+            } else if (field == QStringLiteral("color")) {
+                condition.field = Pica::DebugContext::ConditionField::ColorBuffer;
+            } else if (field == QStringLiteral("depth")) {
+                condition.field = Pica::DebugContext::ConditionField::DepthBuffer;
+            } else if (field == QStringLiteral("draw")) {
+                condition.field = Pica::DebugContext::ConditionField::DrawIndex;
+            } else if (field == QStringLiteral("frame")) {
+                condition.field = Pica::DebugContext::ConditionField::FrameIndex;
+            } else {
+                return false;
+            }
+        }
+        context->SetBreakpointCondition(event, condition);
+        emit dataChanged(index, index);
         return true;
     }
     }
@@ -154,7 +243,7 @@ GraphicsBreakPointsWidget::GraphicsBreakPointsWidget(
     breakpoint_model = new BreakPointModel(debug_context, this);
     breakpoint_list = new QTreeView;
     breakpoint_list->setRootIsDecorated(false);
-    breakpoint_list->setHeaderHidden(true);
+    breakpoint_list->setHeaderHidden(false);
     breakpoint_list->setModel(breakpoint_model);
 
     qRegisterMetaType<Pica::DebugContext::Event>("Pica::DebugContext::Event");

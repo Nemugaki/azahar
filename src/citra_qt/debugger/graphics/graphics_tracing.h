@@ -11,6 +11,7 @@ class System;
 }
 
 class EmuThread;
+class QTableWidget;
 
 class GraphicsTracingWidget : public BreakPointObserverDock {
     Q_OBJECT
@@ -27,6 +28,7 @@ private slots:
     void StartRecording();
     void StopRecording();
     void AbortRecording();
+    void RefreshTimeline();
 
     void OnBreakPointHit(Pica::DebugContext::Event event, const void* data) override;
     void OnResumed() override;
@@ -38,4 +40,6 @@ signals:
 
 private:
     Core::System& system;
+    QWidget* recording_controls;
+    QTableWidget* timeline;
 };

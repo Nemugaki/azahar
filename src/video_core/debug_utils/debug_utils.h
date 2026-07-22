@@ -7,6 +7,7 @@
 #include <array>
 #include <atomic>
 #include <condition_variable>
+#include <deque>
 #include <iterator>
 #include <list>
 #include <memory>
@@ -117,6 +118,41 @@ public:
         bool at_breakpoint;
     };
 
+    enum class ConditionField : u32 {
+        None = 0,
+        EventData = 1,
+        ColorBuffer = 2,
+        DepthBuffer = 3,
+        DrawIndex = 4,
+        FrameIndex = 5,
+    };
+
+    struct BreakPointCondition {
+        ConditionField field{};
+        u32 value{};
+        u32 mask{UINT32_MAX};
+    };
+
+    struct RenderTargetInfo {
+        u32 color_address{};
+        u32 depth_address{};
+        u32 width{};
+        u32 height{};
+        u32 color_format{};
+        u32 depth_format{};
+    };
+
+    enum class TimelineKind : u32 { Draw = 0, Frame = 1 };
+
+    struct TimelineEntry {
+        u32 sequence{};
+        TimelineKind kind{};
+        u32 frame{};
+        u32 draw{};
+        u32 changed_mask{};
+        RenderTargetInfo target{};
+    };
+
     /**
      * Static constructor used to create a shared_ptr of a DebugContext.
      */
@@ -134,8 +170,12 @@ public:
      * Resume() is called.
      */
     void OnEvent(Event event, const void* data) {
+        if (event == Event::IncomingPrimitiveBatch) {
+            RecordTimeline(TimelineKind::Draw);
+        }
         // This check is left in the header to allow the compiler to inline it.
-        if (ignore_breakpoints_until_frame || !breakpoints[(int)event].enabled)
+        if (ignore_breakpoints_until_frame || !breakpoints[(int)event].enabled ||
+            !MatchesCondition(event, data))
             return;
         // For the rest of event handling, call a separate function.
         DoOnEvent(event, data);
@@ -154,9 +194,7 @@ public:
     void ResumeUntilFrame();
 
     /// Called by the GPU at the frame boundary to restore temporarily suppressed breakpoints.
-    void OnFrameBoundary() {
-        ignore_breakpoints_until_frame = false;
-    }
+    void OnFrameBoundary();
 
     void SetBreakpoint(Event event, bool enabled) {
         breakpoints[static_cast<int>(event)].enabled = enabled;
@@ -165,6 +203,15 @@ public:
     bool IsBreakpointEnabled(Event event) const {
         return breakpoints[static_cast<int>(event)].enabled;
     }
+
+    void SetBreakpointCondition(Event event, BreakPointCondition condition);
+    BreakPointCondition GetBreakpointCondition(Event event);
+    void SetRenderTargetInfo(RenderTargetInfo info);
+    RenderTargetInfo GetRenderTargetInfo() const;
+    std::vector<TimelineEntry> GetTimeline(u32 start, u32 count, TimelineKind kind,
+                                           bool filter_kind, u32 required_changes = 0) const;
+    u32 GetTimelineCount() const;
+    void ClearTimeline();
 
     BreakPointState GetBreakpointState();
     std::optional<AttributeBuffer> GetVertexInput();
@@ -176,6 +223,7 @@ public:
         for (auto& bp : breakpoints) {
             bp.enabled = false;
         }
+        breakpoint_conditions.fill({});
         ignore_breakpoints_until_frame = false;
         Resume();
     }
@@ -188,6 +236,8 @@ public:
     std::shared_ptr<CiTrace::Recorder> recorder = nullptr;
 
 private:
+    bool MatchesCondition(Event event, const void* data);
+    void RecordTimeline(TimelineKind kind);
     /**
      * Private default constructor to make sure people always construct this through Construct()
      * instead.
@@ -208,6 +258,14 @@ private:
     AttributeBuffer vertex_input{};
     bool vertex_input_valid{};
     std::atomic_bool ignore_breakpoints_until_frame = false;
+    std::array<BreakPointCondition, static_cast<int>(Event::NumEvents)> breakpoint_conditions{};
+    mutable std::mutex timeline_mutex;
+    RenderTargetInfo render_target{};
+    RenderTargetInfo previous_timeline_target{};
+    std::deque<TimelineEntry> timeline;
+    u32 timeline_sequence{};
+    u32 frame_index{};
+    u32 draw_index{};
 };
 
 extern std::shared_ptr<DebugContext> g_debug_context; // TODO: Get rid of this global

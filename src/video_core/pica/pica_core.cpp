@@ -81,6 +81,18 @@ void PicaCore::ClearSnapshot() {
     snapshot.clear();
 }
 
+void PicaCore::UpdateDebugRenderTarget() {
+    if (!debug_context) {
+        return;
+    }
+    const auto& framebuffer = regs.internal.framebuffer.framebuffer;
+    debug_context->SetRenderTargetInfo(
+        {framebuffer.GetColorBufferPhysicalAddress(), framebuffer.GetDepthBufferPhysicalAddress(),
+         framebuffer.GetWidth(), framebuffer.GetHeight(),
+         static_cast<u32>(framebuffer.color_format.Value()),
+         static_cast<u32>(framebuffer.depth_format.Value())});
+}
+
 void PicaCore::CaptureSnapshot() {
     if (!snapshot_requested.exchange(false)) {
         return;
@@ -545,6 +557,7 @@ void PicaCore::WriteInternalReg(u32 id, u32 value, u32 mask, bool& stop_requeste
     dirty_regs.Set(id);
 
     if (debug_context) {
+        UpdateDebugRenderTarget();
         debug_context->OnEvent(DebugContext::Event::PicaCommandProcessed, &id);
     }
 }
@@ -583,6 +596,10 @@ void PicaCore::SubmitImmediate(u32 value) {
 }
 
 void PicaCore::DrawImmediate() {
+    UpdateDebugRenderTarget();
+    if (debug_context) {
+        debug_context->OnEvent(DebugContext::Event::IncomingPrimitiveBatch, nullptr);
+    }
     CaptureSnapshot();
 
     // Compile the vertex shader.
@@ -624,6 +641,8 @@ void PicaCore::DrawImmediate() {
 
 void PicaCore::DrawArrays(bool is_indexed) {
     MICROPROFILE_SCOPE(GPU_Drawing);
+
+    UpdateDebugRenderTarget();
 
     // Track vertex in the debug recorder.
     if (debug_context) {

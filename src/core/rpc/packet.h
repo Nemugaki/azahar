@@ -26,6 +26,8 @@ enum class PacketType : u32 {
     CPURegisters = 10,
     GXCommandTrace = 11,
     PicaShader = 12,
+    PicaTimeline = 13,
+    PicaRenderTarget = 14,
 };
 
 enum class EmulationControl : u32 {
@@ -56,11 +58,15 @@ enum class PicaSnapshotOperation : u32 {
     Clear = 3,
 };
 
+enum class PicaTimelineOperation : u32 { Read = 0, Clear = 1, Status = 2 };
+
 enum class PicaBreakpointOperation : u32 {
     Status = 0,
     Set = 1,
     Resume = 2,
     Clear = 3,
+    SetCondition = 4,
+    GetCondition = 5,
 };
 
 enum class PicaTraceOperation : u32 {
@@ -112,6 +118,31 @@ struct PicaBreakpointReply {
     u32 active_event;
     u32 at_breakpoint;
 };
+
+struct PicaBreakpointConditionReply {
+    u32 field;
+    u32 value;
+    u32 mask;
+};
+
+struct PicaRenderTargetReply {
+    u32 color_address;
+    u32 depth_address;
+    u32 width;
+    u32 height;
+    u32 color_format;
+    u32 depth_format;
+};
+
+struct PicaTimelineEntry {
+    u32 sequence;
+    u32 kind;
+    u32 frame;
+    u32 draw;
+    u32 changed_mask;
+    PicaRenderTargetReply target;
+};
+static_assert(sizeof(PicaTimelineEntry) == 0x2C);
 
 struct PicaTraceReply {
     u32 active;

@@ -1,3 +1,29 @@
+# Unnamed Azahar fork
+
+To whomever may be curious enough, this is my personal Azahar branch, it has a couple of changes and features, that were made orchestrated by myself, but executed
+with AI, as I am not knowledged enough regarding the ins and outs of emulator itself, or the 3DS GPU, to fit my needs, these being automation, scripts, debugging
+and allowing programs such as AI agents access to the emulator state to help with debugging.
+
+The main features are:
+
+- Expanded and improved RPC. It is now what some people call "first class".
+  - Controls game start, stop, pause, resume, restart, and frame advance. The server listens whenever the application is open, not only while a game is running, so scripts can control the whole game lifetime.
+  - Exposes ARM registers, memory, Pica state and shaders, command traces, breakpoints, current render targets, and a bounded draw/frame timeline without requiring large state dumps.
+  - Supports conditional Pica breakpoints by command, color/depth target, draw, or frame, including masked comparisons.
+  - Exposes dedicated Pica breakpoint resume as well as normal and CPU-debug resume controls.
+  - Supports savestate loading and saving by slot, plus screenshots to a chosen output path.
+  - Reports connected client count and supports a configurable port for running multiple instances.
+  - Gates memory, CPU, Pica, savestate, screenshot, and emulator-control access independently in the UI.
+- Qt debugger improvements use the same underlying state as RPC:
+  - Breakpoint-aware frame advance from normal pauses, CPU-debug pauses, and Pica GPU breakpoints.
+  - Conditional Pica breakpoint editing and a draw/frame timeline with render-target state diffs.
+  - Shared current color/depth render-target inspection in the surface viewer.
+  - Per-core ARM register selection.
+- Fixed an issue that CiTrace *apparently* had since a GPU refactor from 2023.
+
+
+
+# README.md
 ![Azahar Emulator](https://azahar-emu.org/resources/images/logo/azahar-name-and-logo.svg)
 
 ![Current Release](https://img.shields.io/github/v/release/azahar-emu/azahar?label=Current%20Release)

@@ -2,7 +2,9 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
+#include <algorithm>
 #include <QTreeWidgetItem>
+#include <QComboBox>
 #include "citra_qt/debugger/registers.h"
 #include "citra_qt/util/util.h"
 #include "core/arm/arm_interface.h"
@@ -14,6 +16,10 @@ RegistersWidget::RegistersWidget(const Core::System& system_, QWidget* parent)
     cpu_regs_ui->setupUi(this);
 
     tree = cpu_regs_ui->treeWidget;
+    core_selector = new QComboBox(this);
+    cpu_regs_ui->verticalLayout->insertWidget(0, core_selector);
+    connect(core_selector, qOverload<int>(&QComboBox::currentIndexChanged), this,
+            [this] { OnDebugModeEntered(); });
     tree->addTopLevelItem(core_registers = new QTreeWidgetItem(QStringList(tr("Registers"))));
     tree->addTopLevelItem(vfp_registers = new QTreeWidgetItem(QStringList(tr("VFP Registers"))));
     tree->addTopLevelItem(vfp_system_registers =
@@ -66,8 +72,11 @@ void RegistersWidget::OnDebugModeEntered() {
         return;
     }
 
-    // TODO: Handle all cores
-    const auto snapshot = system.GetCore(0).GetRegisterSnapshot();
+    const u32 core = static_cast<u32>(std::max(core_selector->currentIndex(), 0));
+    if (core >= system.GetNumCores()) {
+        return;
+    }
+    const auto snapshot = system.GetCore(core).GetRegisterSnapshot();
     for (int i = 0; i < core_registers->childCount(); ++i) {
         core_registers->child(i)->setText(
             1, QStringLiteral("0x%1").arg(snapshot.core[i], 8, 16, QLatin1Char('0')));
@@ -85,10 +94,15 @@ void RegistersWidget::OnDebugModeEntered() {
 void RegistersWidget::OnDebugModeLeft() {}
 
 void RegistersWidget::OnEmulationStarting(EmuThread* emu_thread) {
+    core_selector->clear();
+    for (u32 core = 0; core < system.GetNumCores(); ++core) {
+        core_selector->addItem(tr("Core %1").arg(core));
+    }
     setEnabled(true);
 }
 
 void RegistersWidget::OnEmulationStopping() {
+    core_selector->clear();
     // Reset widget text
     for (int i = 0; i < core_registers->childCount(); ++i) {
         core_registers->child(i)->setText(1, QString{});

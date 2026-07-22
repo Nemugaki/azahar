@@ -10,6 +10,7 @@
 
 class QTreeWidget;
 class QTreeWidgetItem;
+class QComboBox;
 class EmuThread;
 
 namespace Ui {
@@ -45,6 +46,7 @@ private:
     std::unique_ptr<Ui::ARMRegisters> cpu_regs_ui;
     const Core::System& system;
     QTreeWidget* tree;
+    QComboBox* core_selector;
 
     QTreeWidgetItem* core_registers;
     QTreeWidgetItem* vfp_registers;

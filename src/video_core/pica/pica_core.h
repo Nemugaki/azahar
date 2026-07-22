@@ -151,6 +151,8 @@ private:
 
     void CaptureSnapshot();
 
+    void UpdateDebugRenderTarget();
+
 public:
     union Regs {
         static constexpr std::size_t NUM_REGS = 0x732;
