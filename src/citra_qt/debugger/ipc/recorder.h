@@ -5,7 +5,7 @@
 #pragma once
 
 #include <memory>
-#include <QDockWidget>
+#include <DockWidget.h>
 #include "core/hle/kernel/ipc_debugger/recorder.h"
 
 class QTreeWidgetItem;
@@ -18,7 +18,7 @@ namespace Core {
 class System;
 }
 
-class IPCRecorderWidget : public QDockWidget {
+class IPCRecorderWidget : public ads::CDockWidget {
     Q_OBJECT
 
 public:

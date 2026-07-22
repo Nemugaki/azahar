@@ -58,7 +58,7 @@ if (ENABLE_QT)
         debugger/dock_workspace.cpp
         ../citra_qt/debugger/dock_workspace.cpp
     )
-    target_link_libraries(debugger_dock_workspace_test PRIVATE Qt6::Widgets)
+    target_link_libraries(debugger_dock_workspace_test PRIVATE qtadvanceddocking-qt6 Qt6::Widgets)
     if (CMAKE_SYSTEM_NAME STREQUAL CMAKE_HOST_SYSTEM_NAME)
         add_test(NAME debugger_dock_workspace COMMAND debugger_dock_workspace_test)
         set_tests_properties(debugger_dock_workspace PROPERTIES ENVIRONMENT QT_QPA_PLATFORM=offscreen)

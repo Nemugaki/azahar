@@ -4,9 +4,9 @@
 
 #pragma once
 
-#include <QDockWidget>
+#include <DockWidget.h>
 
-class LLEServiceModulesWidget : public QDockWidget {
+class LLEServiceModulesWidget : public ads::CDockWidget {
     Q_OBJECT
 
 public:

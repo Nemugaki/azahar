@@ -65,7 +65,7 @@ void GPUCommandStreamItemModel::OnGXCommandFinishedInternal(int total_command_co
 }
 
 GPUCommandStreamWidget::GPUCommandStreamWidget(Core::System& system_, QWidget* parent)
-    : QDockWidget(tr("Graphics Debugger"), parent), system{system_}, model(this) {
+    : ads::CDockWidget(tr("Graphics Debugger"), parent), system{system_}, model(this) {
     setObjectName(QStringLiteral("GraphicsDebugger"));
 
     auto* command_list = new QListView;
@@ -97,12 +97,12 @@ void GPUCommandStreamWidget::showEvent(QShowEvent* event) {
     if (system.IsPoweredOn()) {
         Register();
     }
-    QDockWidget::showEvent(event);
+    ads::CDockWidget::showEvent(event);
 }
 
 void GPUCommandStreamWidget::hideEvent(QHideEvent* event) {
     if (system.IsPoweredOn()) {
         Unregister();
     }
-    QDockWidget::hideEvent(event);
+    ads::CDockWidget::hideEvent(event);
 }

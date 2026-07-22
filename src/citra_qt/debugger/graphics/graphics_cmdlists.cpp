@@ -203,7 +203,7 @@ void GPUCommandListWidget::SetCommandInfo(const QModelIndex& index) {
 #undef COMMAND_IN_RANGE
 
 GPUCommandListWidget::GPUCommandListWidget(Core::System& system_, QWidget* parent)
-    : QDockWidget(tr("Pica Command List"), parent), system{system_} {
+    : ads::CDockWidget(tr("Pica Command List"), parent), system{system_} {
     setObjectName(QStringLiteral("Pica Command List"));
     GPUCommandListModel* model = new GPUCommandListModel(this);
 

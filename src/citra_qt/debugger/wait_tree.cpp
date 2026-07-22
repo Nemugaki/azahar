@@ -441,7 +441,7 @@ void WaitTreeModel::InitItems(Core::System& system) {
 }
 
 WaitTreeWidget::WaitTreeWidget(Core::System& system_, QWidget* parent)
-    : QDockWidget(tr("Wait Tree"), parent), system{system_} {
+    : ads::CDockWidget(tr("Wait Tree"), parent), system{system_} {
     setObjectName(QStringLiteral("WaitTreeWidget"));
     view = new QTreeView(this);
     view->setHeaderHidden(true);

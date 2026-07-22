@@ -18,7 +18,8 @@
 #include "ui_recorder.h"
 
 IPCRecorderWidget::IPCRecorderWidget(Core::System& system_, QWidget* parent)
-    : QDockWidget(parent), ui(std::make_unique<Ui::IPCRecorder>()), system{system_} {
+    : ads::CDockWidget(tr("IPC Recorder"), parent), ui(std::make_unique<Ui::IPCRecorder>()),
+      system{system_} {
 
     ui->setupUi(this);
     qRegisterMetaType<IPCDebugger::RequestRecord>();

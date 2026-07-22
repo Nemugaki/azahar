@@ -19,6 +19,10 @@
 #include <QtConcurrent/QtConcurrentRun>
 #include <QtGui>
 #include <QtWidgets>
+#include <DockAreaTitleBar.h>
+#include <DockAreaWidget.h>
+#include <DockManager.h>
+#include <DockWidget.h>
 #include <boost/algorithm/string/replace.hpp>
 #include <fmt/format.h>
 #include <fmt/ostream.h>
@@ -139,7 +143,7 @@ Q_IMPORT_PLUGIN(QWindowsIntegrationPlugin);
 #endif
 
 constexpr int default_mouse_timeout = 2500;
-constexpr int workspace_state_version = 1;
+constexpr int workspace_state_version = 3;
 
 /**
  * "Callouts" are one-time instructional messages shown to the user. In the config settings, there
@@ -569,32 +573,47 @@ void GMainWindow::InitializeWidgets() {
     secondary_window->hide();
     secondary_window->setParent(nullptr);
 
-    game_dock_widget = new QDockWidget(tr("Game"), this);
+    ads::CDockManager::setConfigFlag(ads::CDockManager::DockAreaDynamicTabsMenuButtonVisibility,
+                                     true);
+    ads::CDockManager::setConfigFlag(ads::CDockManager::EqualSplitOnInsertion, true);
+    dock_manager = new ads::CDockManager(this);
+    ui->horizontalLayout->addWidget(dock_manager);
+
+    auto* home = new QWidget;
+    auto* home_layout = new QHBoxLayout(home);
+    home_layout->setContentsMargins(0, 0, 0, 0);
+    library_dock_widget = new ads::CDockWidget(dock_manager, tr("Library"));
+    library_dock_widget->setObjectName(QStringLiteral("Library"));
+    library_dock_widget->setWidget(home, ads::CDockWidget::ForceNoScrollArea);
+    auto* central_area = dock_manager->setCentralWidget(library_dock_widget);
+
+    game_dock_widget = new ads::CDockWidget(dock_manager, tr("Game"));
     game_dock_widget->setObjectName(QStringLiteral("Game"));
-    game_dock_widget->setAllowedAreas(Qt::AllDockWidgetAreas);
-    game_dock_widget->setFeatures(QDockWidget::DockWidgetClosable | QDockWidget::DockWidgetMovable |
-                                  QDockWidget::DockWidgetFloatable);
-    game_dock_widget->setWidget(render_window);
-    addDockWidget(Qt::RightDockWidgetArea, game_dock_widget);
-    game_dock_widget->hide();
+    game_dock_widget->setFeatures(ads::CDockWidget::DockWidgetMovable |
+                                  ads::CDockWidget::DockWidgetFocusable);
+    game_dock_widget->setWidget(render_window, ads::CDockWidget::ForceNoScrollArea);
+    dock_manager->addDockWidget(ads::CenterDockWidgetArea, game_dock_widget, central_area);
+    game_dock_widget->toggleView(false);
 
     ui->menu_View->insertAction(ui->action_Fullscreen, game_dock_widget->toggleViewAction());
 
     game_list = new GameList(*play_time_manager, this);
-    ui->horizontalLayout->addWidget(game_list);
+    home_layout->addWidget(game_list);
 
     game_list_placeholder = new GameListPlaceholder(this);
-    ui->horizontalLayout->addWidget(game_list_placeholder);
+    home_layout->addWidget(game_list_placeholder);
     game_list_placeholder->setVisible(false);
 
     loading_screen = new LoadingScreen(this);
     loading_screen->hide();
-    ui->horizontalLayout->addWidget(loading_screen);
+    home_layout->addWidget(loading_screen);
     connect(loading_screen, &LoadingScreen::Hidden, this, [&] {
         loading_screen->Clear();
         if (emulation_running) {
             if (ui->action_Single_Window_Mode->isChecked()) {
-                game_dock_widget->show();
+                render_window->show();
+                game_dock_widget->toggleView(true);
+                game_dock_widget->setAsCurrentTab();
                 game_dock_widget->raise();
             } else {
                 render_window->show();
@@ -733,8 +752,6 @@ void GMainWindow::InitializeWidgets() {
 }
 
 void GMainWindow::InitializeDebugWidgets() {
-    setDockOptions(dockOptions() | QMainWindow::AllowNestedDocks | QMainWindow::AllowTabbedDocks);
-
     if (Pica::g_debug_context) {
         connect(ui->action_Create_Pica_Surface_Viewer, &QAction::triggered, this,
                 &GMainWindow::OnCreateGraphicsSurfaceViewer);
@@ -743,10 +760,11 @@ void GMainWindow::InitializeDebugWidgets() {
     }
 
     QMenu* debug_menu = ui->menu_View_Debugging;
-    const auto add_debug_dock = [this, debug_menu](Qt::DockWidgetArea area, QDockWidget* dock) {
-        addDockWidget(area, dock);
+    const auto add_debug_dock = [this, debug_menu](ads::DockWidgetArea area,
+                                                   ads::CDockWidget* dock) {
         Debugger::ConfigureDockWorkspace(dock);
-        dock->hide();
+        dock_manager->addDockWidget(area, dock);
+        dock->toggleView(false);
         debug_menu->addAction(dock->toggleViewAction());
     };
 
@@ -757,7 +775,7 @@ void GMainWindow::InitializeDebugWidgets() {
 #endif
 
     registersWidget = new RegistersWidget(system, this);
-    add_debug_dock(Qt::RightDockWidgetArea, registersWidget);
+    add_debug_dock(ads::RightDockWidgetArea, registersWidget);
     connect(this, &GMainWindow::EmulationStarting, registersWidget,
             &RegistersWidget::OnEmulationStarting);
     connect(this, &GMainWindow::EmulationStopping, registersWidget,
@@ -765,7 +783,7 @@ void GMainWindow::InitializeDebugWidgets() {
 
     if (Pica::g_debug_context) {
         graphicsWidget = new GPUCommandStreamWidget(system, this);
-        add_debug_dock(Qt::RightDockWidgetArea, graphicsWidget);
+        add_debug_dock(ads::RightDockWidgetArea, graphicsWidget);
         Debugger::SetDockActiveHandler(graphicsWidget, [this](bool active) {
             if (active && system.IsPoweredOn() && graphicsWidget->isVisible()) {
                 graphicsWidget->Register();
@@ -775,11 +793,11 @@ void GMainWindow::InitializeDebugWidgets() {
         });
 
         graphicsCommandsWidget = new GPUCommandListWidget(system, this);
-        add_debug_dock(Qt::RightDockWidgetArea, graphicsCommandsWidget);
+        add_debug_dock(ads::RightDockWidgetArea, graphicsCommandsWidget);
 
         graphicsBreakpointsWidget =
             new GraphicsBreakPointsWidget(system, Pica::g_debug_context, this);
-        add_debug_dock(Qt::RightDockWidgetArea, graphicsBreakpointsWidget);
+        add_debug_dock(ads::RightDockWidgetArea, graphicsBreakpointsWidget);
         connect(graphicsBreakpointsWidget, &GraphicsBreakPointsWidget::FrameAdvanceRequested, this,
                 [this] { AdvanceFrame(); });
         connect(
@@ -791,10 +809,10 @@ void GMainWindow::InitializeDebugWidgets() {
 
         graphicsVertexShaderWidget =
             new GraphicsVertexShaderWidget(system, Pica::g_debug_context, this);
-        add_debug_dock(Qt::RightDockWidgetArea, graphicsVertexShaderWidget);
+        add_debug_dock(ads::RightDockWidgetArea, graphicsVertexShaderWidget);
 
         graphicsTracingWidget = new GraphicsTracingWidget(system, Pica::g_debug_context, this);
-        add_debug_dock(Qt::RightDockWidgetArea, graphicsTracingWidget);
+        add_debug_dock(ads::RightDockWidgetArea, graphicsTracingWidget);
         connect(this, &GMainWindow::EmulationStarting, graphicsTracingWidget,
                 &GraphicsTracingWidget::OnEmulationStarting);
         connect(this, &GMainWindow::EmulationStopping, graphicsTracingWidget,
@@ -802,21 +820,21 @@ void GMainWindow::InitializeDebugWidgets() {
     }
 
     waitTreeWidget = new WaitTreeWidget(system, this);
-    add_debug_dock(Qt::LeftDockWidgetArea, waitTreeWidget);
+    add_debug_dock(ads::LeftDockWidgetArea, waitTreeWidget);
     connect(this, &GMainWindow::EmulationStarting, waitTreeWidget,
             &WaitTreeWidget::OnEmulationStarting);
     connect(this, &GMainWindow::EmulationStopping, waitTreeWidget,
             &WaitTreeWidget::OnEmulationStopping);
 
     lleServiceModulesWidget = new LLEServiceModulesWidget(this);
-    add_debug_dock(Qt::RightDockWidgetArea, lleServiceModulesWidget);
+    add_debug_dock(ads::RightDockWidgetArea, lleServiceModulesWidget);
     connect(this, &GMainWindow::EmulationStarting,
             [this] { Debugger::SetDockAvailable(lleServiceModulesWidget, false); });
     connect(this, &GMainWindow::EmulationStopping, lleServiceModulesWidget,
             [this] { Debugger::SetDockAvailable(lleServiceModulesWidget, true); });
 
     ipcRecorderWidget = new IPCRecorderWidget(system, this);
-    add_debug_dock(Qt::RightDockWidgetArea, ipcRecorderWidget);
+    add_debug_dock(ads::RightDockWidgetArea, ipcRecorderWidget);
     Debugger::SetDockActiveHandler(
         ipcRecorderWidget, [this](bool active) { ipcRecorderWidget->SetWorkspaceActive(active); });
     connect(this, &GMainWindow::EmulationStarting, ipcRecorderWidget,
@@ -1031,7 +1049,7 @@ void GMainWindow::SetDefaultUIGeometry() {
 
 void GMainWindow::RestoreUIState() {
     restoreGeometry(UISettings::values.geometry);
-    restoreState(UISettings::values.state, workspace_state_version);
+    dock_manager->restoreState(UISettings::values.state, workspace_state_version);
     render_window->restoreGeometry(UISettings::values.renderwindow_geometry);
     secondary_window->restoreGeometry(UISettings::values.secondarywindow_geometry);
 #if MICROPROFILE_ENABLED
@@ -1295,41 +1313,10 @@ void GMainWindow::UpdateMenuState() {
 }
 
 void GMainWindow::OnDisplayTitleBars(bool show) {
-    QList<QDockWidget*> widgets = findChildren<QDockWidget*>();
-
-    for (QDockWidget* widget : widgets) {
-        if (!widget->property("titleBarWorkspaceConnected").toBool()) {
-            widget->setProperty("titleBarWorkspaceConnected", true);
-            connect(widget, &QDockWidget::topLevelChanged, this, [this, widget](bool floating) {
-                if (floating) {
-                    QWidget* old = widget->titleBarWidget();
-                    widget->setTitleBarWidget(nullptr);
-                    delete old;
-                } else {
-                    OnDisplayTitleBars(ui->action_Display_Dock_Widget_Headers->isChecked());
-                }
-            });
-        }
-    }
-
-    if (show) {
-        for (QDockWidget* widget : widgets) {
-            QWidget* old = widget->titleBarWidget();
-            widget->setTitleBarWidget(nullptr);
-            if (old) {
-                delete old;
-            }
-        }
-    } else {
-        for (QDockWidget* widget : widgets) {
-            if (widget->isFloating()) {
-                continue;
-            }
-            QWidget* old = widget->titleBarWidget();
-            widget->setTitleBarWidget(new QWidget());
-            if (old) {
-                delete old;
-            }
+    for (auto* widget : dock_manager->dockWidgetsMap()) {
+        if (auto* area = widget->dockAreaWidget()) {
+            area->titleBar()->setVisible(show || area->openDockWidgetsCount() > 1 ||
+                                         area->dockContainer()->isFloating());
         }
     }
 }
@@ -1731,7 +1718,8 @@ void GMainWindow::ShutdownGame() {
     disconnect(secondary_window, &GRenderWindow::Closed, this, &GMainWindow::OnStopGame);
 
     render_window->hide();
-    game_dock_widget->hide();
+    game_dock_widget->toggleView(false);
+    library_dock_widget->setAsCurrentTab();
     secondary_window->hide();
     loading_screen->hide();
     loading_screen->Clear();
@@ -2879,30 +2867,35 @@ void GMainWindow::ToggleWindowMode() {
         // Render in the main window...
         UISettings::values.renderwindow_geometry = render_window->saveGeometry();
         if (game_dock_widget->widget() != render_window) {
-            game_dock_widget->setWidget(render_window);
+            game_dock_widget->setWidget(render_window, ads::CDockWidget::ForceNoScrollArea);
         }
         render_window->UpdateMinimumSizeForWindowMode();
         render_window->setFocusPolicy(Qt::StrongFocus);
         if (emulation_running) {
             if (loading_screen->isVisible()) {
                 ui->centralwidget->show();
-                game_dock_widget->hide();
+                library_dock_widget->setAsCurrentTab();
             } else {
-                game_dock_widget->show();
+                render_window->show();
+                game_dock_widget->toggleView(true);
+                game_dock_widget->setAsCurrentTab();
                 render_window->setFocus();
             }
             game_list->hide();
         } else {
-            game_dock_widget->hide();
+            render_window->hide();
+            game_dock_widget->toggleView(false);
+            library_dock_widget->setAsCurrentTab();
             ui->centralwidget->show();
         }
 
     } else {
         // Render in a separate window...
         render_window->setParent(nullptr);
-        game_dock_widget->setWidget(nullptr);
+        game_dock_widget->takeWidget();
         render_window->UpdateMinimumSizeForWindowMode();
-        game_dock_widget->hide();
+        game_dock_widget->toggleView(false);
+        library_dock_widget->setAsCurrentTab();
         ui->centralwidget->show();
         if (emulation_running) {
             render_window->setVisible(true);
@@ -3256,10 +3249,9 @@ void GMainWindow::OnToggleFilterBar() {
 void GMainWindow::OnCreateGraphicsSurfaceViewer() {
     auto graphicsSurfaceViewerWidget =
         new GraphicsSurfaceWidget(system, Pica::g_debug_context, this);
-    addDockWidget(Qt::RightDockWidgetArea, graphicsSurfaceViewerWidget);
     Debugger::ConfigureDockWorkspace(graphicsSurfaceViewerWidget);
-    // TODO: Maybe graphicsSurfaceViewerWidget->setFloating(true);
-    graphicsSurfaceViewerWidget->show();
+    dock_manager->addDockWidget(ads::RightDockWidgetArea, graphicsSurfaceViewerWidget);
+    graphicsSurfaceViewerWidget->toggleView(true);
 }
 
 void GMainWindow::OnRecordMovie() {
@@ -4425,7 +4417,7 @@ void GMainWindow::UpdateUISettings() {
     if (!secondary_window->isFullScreen()) {
         UISettings::values.secondarywindow_geometry = secondary_window->saveGeometry();
     }
-    UISettings::values.state = saveState(workspace_state_version);
+    UISettings::values.state = dock_manager->saveState(workspace_state_version);
 #if MICROPROFILE_ENABLED
     UISettings::values.microprofile_geometry = microProfileDialog->saveGeometry();
     UISettings::values.microprofile_visible = microProfileDialog->isVisible();
@@ -4572,6 +4564,18 @@ int LaunchQtFrontend(int argc, char* argv[]) {
 #if MICROPROFILE_ENABLED
     MicroProfileOnThreadCreate("Frontend");
     SCOPE_EXIT({ MicroProfileShutdown(); });
+#endif
+
+#ifdef __linux__
+    const QString desktop = qEnvironmentVariable("XDG_CURRENT_DESKTOP");
+    const QString platform = qEnvironmentVariable("QT_QPA_PLATFORM");
+    if (qEnvironmentVariable("XDG_SESSION_TYPE") == QStringLiteral("wayland") &&
+        desktop.contains(QStringLiteral("Hyprland"), Qt::CaseInsensitive) &&
+        (platform.isEmpty() || platform == QStringLiteral("wayland;xcb"))) {
+        // Hyprland can leave Qt's Wayland drag active after detaching an ADS tab, blocking input.
+        // Prefer XWayland there until the compositor's native drag path is reliable.
+        qputenv("QT_QPA_PLATFORM", QByteArrayLiteral("xcb;wayland"));
+    }
 #endif
 
     // Init settings params

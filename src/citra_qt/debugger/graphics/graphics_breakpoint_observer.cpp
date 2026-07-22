@@ -7,7 +7,7 @@
 
 BreakPointObserverDock::BreakPointObserverDock(std::shared_ptr<Pica::DebugContext> debug_context,
                                                const QString& title, QWidget* parent)
-    : QDockWidget(title, parent), BreakPointObserver(debug_context) {
+    : ads::CDockWidget(title, parent), BreakPointObserver(debug_context) {
     qRegisterMetaType<Pica::DebugContext::Event>("Pica::DebugContext::Event");
 
     connect(this, &BreakPointObserverDock::Resumed, this, &BreakPointObserverDock::OnResumed);

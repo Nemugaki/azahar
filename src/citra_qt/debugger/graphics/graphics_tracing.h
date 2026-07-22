@@ -23,6 +23,7 @@ class QSlider;
 class QSpinBox;
 class QTreeWidget;
 class QTreeWidgetItem;
+class ScaledPixmapLabel;
 
 class GraphicsTracingWidget : public BreakPointObserverDock {
     Q_OBJECT
@@ -74,7 +75,7 @@ private:
     QSlider* event_slider;
     QLabel* event_position;
     QLabel* timeline_details;
-    QLabel* output_preview;
+    ScaledPixmapLabel* output_preview;
     QLabel* output_status;
     QPushButton* open_color_target;
     QPushButton* open_depth_target;

@@ -6,7 +6,7 @@
 
 #include <span>
 #include <QAbstractItemModel>
-#include <QDockWidget>
+#include <DockWidget.h>
 #include <QTreeView>
 #include <boost/container/flat_set.hpp>
 #include "core/core.h"
@@ -176,7 +176,7 @@ private:
     std::vector<std::unique_ptr<WaitTreeThread>> thread_items;
 };
 
-class WaitTreeWidget : public QDockWidget {
+class WaitTreeWidget : public ads::CDockWidget {
     Q_OBJECT
 
 public:

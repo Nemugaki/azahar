@@ -106,3 +106,6 @@
 [submodule "externals/cryptopp"]
 	path = externals/cryptopp
 	url = https://github.com/cryptopp-modern/cryptopp-modern.git
+[submodule "externals/qt-advanced-docking-system"]
+    path = externals/qt-advanced-docking-system
+    url = https://github.com/githubuser0xFFFF/Qt-Advanced-Docking-System.git

@@ -5,7 +5,7 @@
 #pragma once
 
 #include <QAbstractListModel>
-#include <QDockWidget>
+#include <DockWidget.h>
 #include "video_core/gpu_debugger.h"
 
 namespace Core {
@@ -35,7 +35,7 @@ private:
     int command_count;
 };
 
-class GPUCommandStreamWidget : public QDockWidget {
+class GPUCommandStreamWidget : public ads::CDockWidget {
     Q_OBJECT
 
 public:

@@ -197,7 +197,7 @@ QString BreakPointModel::DebugContextEventToString(Pica::DebugContext::Event eve
 
 GraphicsBreakPointsWidget::GraphicsBreakPointsWidget(
     Core::System& system_, std::shared_ptr<Pica::DebugContext> debug_context, QWidget* parent)
-    : QDockWidget(tr("Pica Breakpoints"), parent),
+    : ads::CDockWidget(tr("Pica Breakpoints"), parent),
       Pica::DebugContext::BreakPointObserver(debug_context), system{system_} {
     setObjectName(QStringLiteral("PicaBreakPointsWidget"));
     Debugger::SetDockActiveHandler(this, [context = std::weak_ptr{debug_context}](bool active) {

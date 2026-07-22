@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <QDockWidget>
+#include <DockWidget.h>
 #include "video_core/debug_utils/debug_utils.h"
 
 /**
@@ -12,7 +12,7 @@
  * This is because the Pica breakpoint callbacks are called from a non-GUI thread, while
  * the widget usually wants to perform reactions in the GUI thread.
  */
-class BreakPointObserverDock : public QDockWidget,
+class BreakPointObserverDock : public ads::CDockWidget,
                                protected Pica::DebugContext::BreakPointObserver {
     Q_OBJECT
 

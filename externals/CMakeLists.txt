@@ -19,6 +19,16 @@ set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} ${PROJECT_SOURCE_DIR}/CMakeModules)
 include(DownloadExternals)
 include(ExternalProject)
 
+# Qt Advanced Docking System
+if (ENABLE_QT)
+    set(ADS_VERSION 5.0.0)
+    set(BUILD_EXAMPLES OFF)
+    set(BUILD_STATIC ON)
+    add_subdirectory(qt-advanced-docking-system EXCLUDE_FROM_ALL)
+    unset(BUILD_EXAMPLES)
+    unset(BUILD_STATIC)
+endif()
+
 # Boost
 if (USE_SYSTEM_BOOST)
     unset(BOOST_ROOT CACHE)

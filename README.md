@@ -1,4 +1,4 @@
-# Unnamed Azahar fork
+# Azahar fork: Cool Developer Edition
 
 To whomever may be curious enough, this is my personal Azahar branch, it has a couple of changes and features, that were made orchestrated by myself, but executed
 with AI, as I am not knowledged enough regarding the ins and outs of emulator itself, or the 3DS GPU, to fit my needs, these being automation, scripts, debugging
@@ -8,6 +8,7 @@ I eventually lost the plot and just added too many features, including overhauli
 
 The main features are:
 
+- The UI now uses QT Advancing Docking System, as I found to have issues with the so many debugger windows and tools stacking on top of eachother on a single, right side pane.
 - Expanded and improved RPC. It is now what some people call "first class".
   - Controls game start, stop, pause, resume, restart, and frame advance. The server listens whenever the application is open, not only while a game is running, so scripts can control the whole game lifetime.
   - Exposes ARM registers, memory, Pica state and shaders, command traces, breakpoints, current render targets, and a bounded draw/frame timeline without requiring large state dumps.
@@ -35,7 +36,10 @@ The main features are:
 - Fixed an issue that CiTrace *apparently* had an issue since a GPU refactor from 2023.
 - CiTrace and command histories are bounded by the debugger cache limit; incomplete traces are identified instead of silently saved.
 
-
+### Merging
+Per [AI-POLICY.md](AI-POLICY.md) I will not open a merge request to the original repo with any of these changes whatsoever.
+This repo remains open for anybody to explore its changes, and will remain updated as long as I require to use Azahar in my workflow.
+I do not care for what the code is used for.
 
 # README.md
 ![Azahar Emulator](https://azahar-emu.org/resources/images/logo/azahar-name-and-logo.svg)

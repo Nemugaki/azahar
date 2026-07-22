@@ -55,7 +55,8 @@ GraphicsSurfaceWidget::GraphicsSurfaceWidget(Core::System& system_,
                                              QWidget* parent)
     : BreakPointObserverDock(debug_context, tr("Pica Surface Viewer"), parent), system{system_},
       surface_source(Source::ColorBuffer) {
-    setObjectName(QStringLiteral("PicaSurface"));
+    static unsigned instance_id;
+    setObjectName(QStringLiteral("PicaSurface%1").arg(++instance_id));
 
     surface_source_list = new QComboBox;
     surface_source_list->addItem(tr("Color Buffer"));

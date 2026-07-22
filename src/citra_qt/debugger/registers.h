@@ -5,7 +5,7 @@
 #pragma once
 
 #include <memory>
-#include <QDockWidget>
+#include <DockWidget.h>
 #include "common/common_types.h"
 
 class QTreeWidget;
@@ -23,7 +23,7 @@ class ARM_Interface;
 class System;
 } // namespace Core
 
-class RegistersWidget : public QDockWidget {
+class RegistersWidget : public ads::CDockWidget {
     Q_OBJECT
 
 public:

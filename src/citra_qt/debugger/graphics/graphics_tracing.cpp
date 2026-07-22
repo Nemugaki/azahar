@@ -15,10 +15,10 @@
 #include <QImage>
 #include <QLabel>
 #include <QLineEdit>
-#include <QMainWindow>
 #include <QMessageBox>
 #include <QPixmap>
 #include <QPushButton>
+#include <QResizeEvent>
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QSignalBlocker>
@@ -27,6 +27,7 @@
 #include <QSplitter>
 #include <QTimer>
 #include <QTreeWidget>
+#include <DockManager.h>
 #include <nihstro/float24.h>
 #include "citra_qt/debugger/dock_workspace.h"
 #include "citra_qt/debugger/graphics/graphics_surface.h"
@@ -39,6 +40,36 @@
 #include "video_core/gpu.h"
 #include "video_core/pica/pica_core.h"
 #include "video_core/texture/texture_decode.h"
+
+class ScaledPixmapLabel final : public QLabel {
+public:
+    using QLabel::QLabel;
+
+    void SetPixmap(QPixmap pixmap) {
+        source = std::move(pixmap);
+        UpdatePixmap();
+    }
+
+    QSize sizeHint() const override {
+        return {};
+    }
+
+protected:
+    void resizeEvent(QResizeEvent* event) override {
+        QLabel::resizeEvent(event);
+        UpdatePixmap();
+    }
+
+private:
+    void UpdatePixmap() {
+        QLabel::setPixmap(source.isNull()
+                              ? source
+                              : source.scaled(contentsRect().size(), Qt::KeepAspectRatio,
+                                              Qt::SmoothTransformation));
+    }
+
+    QPixmap source;
+};
 
 namespace {
 
@@ -105,7 +136,7 @@ GraphicsTracingWidget::GraphicsTracingWidget(Core::System& system_,
             render_sessions->GetLive()->SetCaptureEnabled(active);
             UpdateOutputCaptureState();
         });
-        connect(this, &QDockWidget::visibilityChanged, this,
+        connect(this, &ads::CDockWidget::visibilityChanged, this,
                 [this](bool) { UpdateOutputCaptureState(); });
     }
     timeline = new QTreeWidget;
@@ -128,7 +159,8 @@ GraphicsTracingWidget::GraphicsTracingWidget(Core::System& system_,
     timeline_details = new QLabel(tr("Select a draw call to inspect it."));
     timeline_details->setWordWrap(true);
     timeline_details->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    output_preview = new QLabel(tr("Select a draw call to view its captured output."));
+    output_preview = new ScaledPixmapLabel(
+        tr("Select a draw call to view its captured output."));
     output_preview->setAlignment(Qt::AlignCenter);
     output_preview->setMinimumSize(0, 0);
     output_preview->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
@@ -583,7 +615,7 @@ void GraphicsTracingWidget::SelectTimelineEntry(QTreeWidgetItem* current) {
     if (!current || !current->data(0, Qt::UserRole).isValid()) {
         displayed_output_sequence.reset();
         timeline_details->setText(tr("Select a draw call to inspect it."));
-        output_preview->setPixmap(QPixmap{});
+        output_preview->SetPixmap({});
         output_preview->setText(tr("Select a draw call to view its captured output."));
         output_status->clear();
         open_color_target->setEnabled(false);
@@ -662,14 +694,14 @@ void GraphicsTracingWidget::UpdateOutput(Debugger::u32 sequence) {
     }
     const auto resource = render_sessions->GetActive()->GetDrawOutput(sequence);
     if (!resource) {
-        output_preview->setPixmap(QPixmap{});
+        output_preview->SetPixmap({});
         output_preview->setText(tr("Output was not captured for this draw."));
         output_status->setText(tr("Output capture is available while the live debugger is enabled "
                                   "and visible."));
         return;
     }
     if (resource->bytes.empty()) {
-        output_preview->setPixmap(QPixmap{});
+        output_preview->SetPixmap({});
         output_preview->setText(tr("Output data is not available for this draw."));
         output_status->setText(tr("The render target metadata was captured without pixel data."));
         return;
@@ -677,7 +709,7 @@ void GraphicsTracingWidget::UpdateOutput(Debugger::u32 sequence) {
     displayed_output_sequence = sequence;
     const QImage image = DecodeColorTarget(*resource);
     if (image.isNull()) {
-        output_preview->setPixmap(QPixmap{});
+        output_preview->SetPixmap({});
         output_preview->setText(tr("Captured output cannot be decoded."));
         output_status->setText(tr("%1x%2 · format %3 · %4 bytes")
                                    .arg(resource->width)
@@ -687,8 +719,7 @@ void GraphicsTracingWidget::UpdateOutput(Debugger::u32 sequence) {
         return;
     }
     output_preview->setText({});
-    output_preview->setPixmap(
-        QPixmap::fromImage(image).scaled(960, 540, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+    output_preview->SetPixmap(QPixmap::fromImage(image));
     output_status->setText(tr("%1x%2 · format %3 · address 0x%4 · %5 bytes")
                                .arg(resource->width)
                                .arg(resource->height)
@@ -710,16 +741,13 @@ void GraphicsTracingWidget::OpenTarget(bool depth) {
         render_sessions->GetActiveId() != Debugger::RenderSessionManager::LiveSessionId) {
         return;
     }
-    auto* viewer = new GraphicsSurfaceWidget(system, context_weak.lock(), parentWidget());
+    auto* viewer = new GraphicsSurfaceWidget(system, context_weak.lock(), dockManager());
     Debugger::ConfigureDockWorkspace(viewer);
-    if (auto* main = qobject_cast<QMainWindow*>(parentWidget())) {
-        main->addDockWidget(Qt::RightDockWidgetArea, viewer);
-    }
     viewer->setAttribute(Qt::WA_DeleteOnClose);
-    viewer->setFloating(true);
+    dockManager()->addDockWidgetFloating(viewer);
     viewer->ViewRenderTarget(*selected_target, depth);
     viewer->resize(640, 520);
-    viewer->show();
+    viewer->toggleView(true);
 }
 
 void GraphicsTracingWidget::ImportCapture() {

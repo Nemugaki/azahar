@@ -10,7 +10,7 @@
 #include "common/settings.h"
 
 LLEServiceModulesWidget::LLEServiceModulesWidget(QWidget* parent)
-    : QDockWidget(tr("Toggle LLE Service Modules"), parent) {
+    : ads::CDockWidget(tr("Toggle LLE Service Modules"), parent) {
     setObjectName(QStringLiteral("LLEServiceModulesWidget"));
     QScrollArea* scroll_area = new QScrollArea;
     QLayout* scroll_layout = new QVBoxLayout;

@@ -1,13 +1,12 @@
 // Copyright Azahar Emulator Project
 // Licensed under GPLv2 or any later version
 
-#include <QDockWidget>
 #include <QHBoxLayout>
-#include <QLayout>
 #include <QPushButton>
 #include <QVBoxLayout>
 #include <QVariant>
 #include <QWidget>
+#include <DockWidget.h>
 #include "citra_qt/debugger/dock_workspace.h"
 
 namespace Debugger {
@@ -21,13 +20,13 @@ constexpr auto HandlerProperty = "debuggerWorkspaceHandler";
 
 class ActiveHandler final : public QObject {
 public:
-    ActiveHandler(QDockWidget* dock, std::function<void(bool)> callback_)
+    ActiveHandler(ads::CDockWidget* dock, std::function<void(bool)> callback_)
         : QObject(dock), callback{std::move(callback_)} {}
 
     std::function<void(bool)> callback;
 };
 
-void ApplyDockState(QDockWidget* dock) {
+void ApplyDockState(ads::CDockWidget* dock) {
     auto* content = static_cast<QWidget*>(dock->property(ContentProperty).value<QObject*>());
     auto* toggle = static_cast<QPushButton*>(dock->property(ToggleProperty).value<QObject*>());
     if (!content || !toggle) {
@@ -57,7 +56,7 @@ void ApplyDockState(QDockWidget* dock) {
 
 } // namespace
 
-void ConfigureDockWorkspace(QDockWidget* dock) {
+void ConfigureDockWorkspace(ads::CDockWidget* dock) {
     if (!dock || dock->property(ContentProperty).isValid()) {
         return;
     }
@@ -68,18 +67,13 @@ void ConfigureDockWorkspace(QDockWidget* dock) {
     }
 
     const bool available = dock->isEnabled();
-    content->setParent(nullptr);
-    dock->setWidget(nullptr);
+    dock->takeWidget();
     dock->setEnabled(true);
-    dock->setAllowedAreas(Qt::AllDockWidgetAreas);
-    dock->setFeatures(QDockWidget::DockWidgetClosable | QDockWidget::DockWidgetMovable |
-                      QDockWidget::DockWidgetFloatable);
-    dock->setMinimumSize(1, 1);
+    dock->setFeatures(ads::CDockWidget::DefaultDockWidgetFeatures);
     content->setMinimumSize(0, 0);
 
     auto* container = new QWidget(dock);
     auto* layout = new QVBoxLayout(container);
-    layout->setSizeConstraint(QLayout::SetNoConstraint);
     auto* controls = new QHBoxLayout;
     auto* toggle = new QPushButton(QObject::tr("Disable"), container);
     toggle->setAccessibleName(QObject::tr("Enable or disable %1").arg(dock->windowTitle()));
@@ -89,7 +83,7 @@ void ConfigureDockWorkspace(QDockWidget* dock) {
     layout->setSpacing(4);
     layout->addLayout(controls);
     layout->addWidget(content);
-    dock->setWidget(container);
+    dock->setWidget(container, ads::CDockWidget::ForceNoScrollArea);
     container->setEnabled(true);
     toggle->setEnabled(true);
 
@@ -105,7 +99,7 @@ void ConfigureDockWorkspace(QDockWidget* dock) {
     ApplyDockState(dock);
 }
 
-void SetDockAvailable(QDockWidget* dock, bool available) {
+void SetDockAvailable(ads::CDockWidget* dock, bool available) {
     if (!dock || !dock->property(ContentProperty).isValid()) {
         if (dock) {
             dock->setEnabled(available);
@@ -116,16 +110,16 @@ void SetDockAvailable(QDockWidget* dock, bool available) {
     ApplyDockState(dock);
 }
 
-bool IsDockActive(const QDockWidget* dock) {
+bool IsDockActive(const ads::CDockWidget* dock) {
     return dock && dock->property(EnabledProperty).toBool() &&
            dock->property(AvailableProperty).toBool();
 }
 
-bool IsDockUserEnabled(const QDockWidget* dock) {
+bool IsDockUserEnabled(const ads::CDockWidget* dock) {
     return dock && dock->property(EnabledProperty).toBool();
 }
 
-void SetDockActiveHandler(QDockWidget* dock, std::function<void(bool)> callback) {
+void SetDockActiveHandler(ads::CDockWidget* dock, std::function<void(bool)> callback) {
     if (!dock) {
         return;
     }

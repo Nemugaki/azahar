@@ -15,7 +15,8 @@
 #include "ui_registers.h"
 
 RegistersWidget::RegistersWidget(Core::System& system_, QWidget* parent)
-    : QDockWidget(parent), cpu_regs_ui(std::make_unique<Ui::ARMRegisters>()), system{system_} {
+    : ads::CDockWidget(tr("ARM Registers"), parent),
+      cpu_regs_ui(std::make_unique<Ui::ARMRegisters>()), system{system_} {
     cpu_regs_ui->setupUi(this);
 
     tree = cpu_regs_ui->treeWidget;

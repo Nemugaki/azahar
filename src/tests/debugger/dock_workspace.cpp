@@ -3,17 +3,18 @@
 
 #include <cassert>
 #include <QApplication>
-#include <QDockWidget>
-#include <QMainWindow>
 #include <QPushButton>
 #include <QWidget>
+#include <DockAreaWidget.h>
+#include <DockManager.h>
+#include <DockWidget.h>
 #include "citra_qt/debugger/dock_workspace.h"
 
 int main(int argc, char* argv[]) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication app(argc, argv);
-    QMainWindow window;
-    QDockWidget dock(QStringLiteral("Debugger"), &window);
+    ads::CDockManager manager;
+    ads::CDockWidget dock(&manager, QStringLiteral("Debugger"));
     auto* content = new QWidget;
     dock.setWidget(content);
     dock.setEnabled(false);
@@ -21,23 +22,22 @@ int main(int argc, char* argv[]) {
     Debugger::SetDockActiveHandler(&dock,
                                    [&callback_active](bool active) { callback_active = active; });
 
-    window.addDockWidget(Qt::RightDockWidgetArea, &dock);
     Debugger::ConfigureDockWorkspace(&dock);
+    manager.addDockWidget(ads::RightDockWidgetArea, &dock);
 
-    assert(dock.allowedAreas() == Qt::AllDockWidgetAreas);
-    assert(dock.features().testFlag(QDockWidget::DockWidgetMovable));
-    assert(dock.features().testFlag(QDockWidget::DockWidgetFloatable));
-    assert(dock.features().testFlag(QDockWidget::DockWidgetClosable));
+    assert(dock.features().testFlag(ads::CDockWidget::DockWidgetMovable));
+    assert(dock.features().testFlag(ads::CDockWidget::DockWidgetFloatable));
+    assert(dock.features().testFlag(ads::CDockWidget::DockWidgetClosable));
     assert(dock.isEnabled());
     assert(dock.property("debuggerWorkspaceContent").value<QObject*>() == content);
     assert(dock.isAncestorOf(content));
     Debugger::SetDockAvailable(&dock, false);
     assert(!content->isEnabled());
     assert(content->updatesEnabled());
-    assert(dock.minimumSize() == QSize(1, 1));
     assert(Debugger::IsDockUserEnabled(&dock));
 
-    auto* toggle = dock.findChild<QPushButton*>();
+    auto* toggle = qobject_cast<QPushButton*>(
+        dock.property("debuggerWorkspaceToggle").value<QObject*>());
     assert(toggle && toggle->isEnabled());
     assert(!toggle->isCheckable());
     toggle->click();
@@ -48,9 +48,43 @@ int main(int argc, char* argv[]) {
     toggle->click();
     assert(Debugger::IsDockActive(&dock) && content->isEnabled() && callback_active);
 
-    dock.setFloating(true);
+    dock.setFloating();
     app.processEvents();
     assert(dock.isEnabled());
-    assert(dock.windowModality() == Qt::NonModal);
+    assert(dock.isInFloatingContainer());
+
+    ads::CDockManager::setConfigFlag(ads::CDockManager::EqualSplitOnInsertion, true);
+    ads::CDockManager layout_manager;
+    layout_manager.resize(1000, 700);
+    auto make_dock = [&layout_manager](const QString& title) {
+        auto* widget = new ads::CDockWidget(&layout_manager, title);
+        widget->setWidget(new QWidget);
+        return widget;
+    };
+    auto* center = layout_manager.setCentralWidget(make_dock(QStringLiteral("Center")));
+    auto* game = make_dock(QStringLiteral("Game"));
+    layout_manager.addDockWidget(ads::CenterDockWidgetArea, game, center);
+    game->toggleView(false);
+    game->toggleView(true);
+    auto* left = layout_manager.addDockWidget(ads::LeftDockWidgetArea,
+                                               make_dock(QStringLiteral("Left")));
+    auto* right = layout_manager.addDockWidget(ads::RightDockWidgetArea,
+                                                make_dock(QStringLiteral("Right")));
+    layout_manager.show();
+    app.processEvents();
+    assert(game->dockAreaWidget() == center);
+    assert(game->height() > 0);
+    assert(center->height() > 0);
+    assert(left->geometry().top() == center->geometry().top());
+    assert(left->geometry().bottom() == center->geometry().bottom());
+    assert(right->geometry().top() == center->geometry().top());
+    assert(right->geometry().bottom() == center->geometry().bottom());
+
+    auto* bottom = layout_manager.addDockWidget(ads::BottomDockWidgetArea,
+                                                 make_dock(QStringLiteral("Bottom")), center);
+    app.processEvents();
+    assert(center->height() > 200);
+    assert(bottom->height() > 200);
+    assert(bottom->geometry().top() > center->geometry().bottom());
     return 0;
 }

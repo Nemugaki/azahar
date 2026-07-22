@@ -5,7 +5,7 @@
 #pragma once
 
 #include <memory>
-#include <QDockWidget>
+#include <DockWidget.h>
 #include "video_core/debug_utils/debug_utils.h"
 
 class QLabel;
@@ -22,7 +22,8 @@ namespace Core {
 class System;
 }
 
-class GraphicsBreakPointsWidget : public QDockWidget, Pica::DebugContext::BreakPointObserver {
+class GraphicsBreakPointsWidget : public ads::CDockWidget,
+                                  Pica::DebugContext::BreakPointObserver {
     Q_OBJECT
 
     using Event = Pica::DebugContext::Event;

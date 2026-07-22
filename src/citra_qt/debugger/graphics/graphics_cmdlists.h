@@ -6,7 +6,7 @@
 
 #include <optional>
 #include <QAbstractListModel>
-#include <QDockWidget>
+#include <DockWidget.h>
 #include "video_core/debug_utils/debug_utils.h"
 
 class QPushButton;
@@ -40,7 +40,7 @@ private:
     std::vector<std::optional<u32>> previous_values;
 };
 
-class GPUCommandListWidget : public QDockWidget {
+class GPUCommandListWidget : public ads::CDockWidget {
     Q_OBJECT
 
 public:
