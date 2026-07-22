@@ -144,6 +144,16 @@ public:
 
     enum class TimelineKind : u32 { Draw = 0, Frame = 1 };
 
+    enum class DrawMode : u32 { Arrays = 0, Indexed = 1, Immediate = 2 };
+
+    struct DrawInfo {
+        DrawMode mode{};
+        u32 vertex_count{};
+        u32 topology{};
+        u32 vertex_offset{};
+        u32 vertex_shader_entry{};
+    };
+
     struct TimelineEntry {
         u32 sequence{};
         TimelineKind kind{};
@@ -151,6 +161,7 @@ public:
         u32 draw{};
         u32 changed_mask{};
         RenderTargetInfo target{};
+        DrawInfo draw_info{};
     };
 
     struct TimelinePosition {
@@ -175,9 +186,6 @@ public:
      * Resume() is called.
      */
     void OnEvent(Event event, const void* data) {
-        if (event == Event::IncomingPrimitiveBatch) {
-            RecordTimeline(TimelineKind::Draw);
-        }
         // This check is left in the header to allow the compiler to inline it.
         if (ignore_breakpoints_until_frame || !breakpoints[(int)event].enabled ||
             !MatchesCondition(event, data))
@@ -187,6 +195,9 @@ public:
     }
 
     void DoOnEvent(Event event, const void* data);
+
+    /// Records an ordered draw call and emits the matching debugger event.
+    void OnDraw(const DrawInfo& info);
 
     /**
      * Resume from the current breakpoint.
@@ -218,6 +229,7 @@ public:
     u32 GetTimelineCount() const;
     TimelinePosition GetTimelinePosition() const;
     void ClearTimeline();
+    void SetTimelineFrameLimit(u32 frame_limit);
 
     BreakPointState GetBreakpointState();
     std::optional<AttributeBuffer> GetVertexInput();
@@ -243,7 +255,7 @@ public:
 
 private:
     bool MatchesCondition(Event event, const void* data);
-    void RecordTimeline(TimelineKind kind);
+    void RecordTimeline(TimelineKind kind, const DrawInfo& info);
     /**
      * Private default constructor to make sure people always construct this through Construct()
      * instead.
@@ -272,6 +284,7 @@ private:
     u32 timeline_sequence{};
     u32 frame_index{};
     u32 draw_index{};
+    std::atomic<u32> timeline_frame_limit{8};
 };
 
 extern std::shared_ptr<DebugContext> g_debug_context; // TODO: Get rid of this global

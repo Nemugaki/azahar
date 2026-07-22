@@ -80,6 +80,7 @@ public:
                                    std::shared_ptr<Pica::DebugContext> debug_context,
                                    QWidget* parent = nullptr);
     void Pick(int x, int y);
+    void ViewRenderTarget(const Pica::DebugContext::RenderTargetInfo& target, bool depth);
 
 public slots:
     void OnSurfaceSourceChanged(int new_value);

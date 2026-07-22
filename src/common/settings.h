@@ -531,6 +531,8 @@ struct Values {
     Setting<bool> use_gles{false, Keys::use_gles};
     Setting<bool> renderer_debug{false, Keys::renderer_debug};
     Setting<bool> pica_debugging{false, Keys::pica_debugging};
+    Setting<u32, true> render_debugger_frame_limit{8, 1, 120,
+                                                   Keys::render_debugger_frame_limit};
     Setting<bool> dump_command_buffers{false, Keys::dump_command_buffers};
     SwitchableSetting<bool> spirv_shader_gen{true, Keys::spirv_shader_gen};
     SwitchableSetting<bool> disable_spirv_optimizer{true, Keys::disable_spirv_optimizer};

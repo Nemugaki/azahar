@@ -563,6 +563,10 @@ static const char* android_config_default_file_content = (BOOST_HANA_STRING(R"(
 # 0 (default): Off, 1: On
 )") DECLARE_KEY(pica_debugging) BOOST_HANA_STRING(R"(
 
+# Number of recent frames retained as render debugger timeline metadata
+# 8 (default), 1-120
+)") DECLARE_KEY(render_debugger_frame_limit) BOOST_HANA_STRING(R"(
+
 # Flush log output on every message
 # Immediately commits the debug log to file. Use this if Azahar crashes and the log output is being cut.
 )") DECLARE_KEY(instant_debug_log) BOOST_HANA_STRING(R"(

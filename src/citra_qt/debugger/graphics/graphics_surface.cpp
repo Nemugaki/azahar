@@ -223,6 +223,36 @@ void GraphicsSurfaceWidget::OnResumed() {
     widget()->setEnabled(false);
 }
 
+void GraphicsSurfaceWidget::ViewRenderTarget(
+    const Pica::DebugContext::RenderTargetInfo& target, bool depth) {
+    surface_source = Source::Custom;
+    surface_source_list->setCurrentIndex(static_cast<int>(Source::Custom));
+    surface_address = depth ? target.depth_address : target.color_address;
+    surface_width = target.width;
+    surface_height = target.height;
+    if (depth) {
+        switch (static_cast<Pica::FramebufferRegs::DepthFormat>(target.depth_format)) {
+        case Pica::FramebufferRegs::DepthFormat::D16:
+            surface_format = Format::D16;
+            break;
+        case Pica::FramebufferRegs::DepthFormat::D24:
+            surface_format = Format::D24;
+            break;
+        case Pica::FramebufferRegs::DepthFormat::D24S8:
+            surface_format = Format::D24X8;
+            break;
+        default:
+            surface_format = Format::Unknown;
+        }
+    } else {
+        surface_format = static_cast<Format>(target.color_format);
+        if (surface_format > Format::RGBA4) {
+            surface_format = Format::Unknown;
+        }
+    }
+    emit Update();
+}
+
 void GraphicsSurfaceWidget::OnSurfaceSourceChanged(int new_value) {
     surface_source = static_cast<Source>(new_value);
     emit Update();

@@ -60,6 +60,11 @@ void DebugContext::DoOnEvent(Event event, const void* data) {
     }
 }
 
+void DebugContext::OnDraw(const DrawInfo& info) {
+    RecordTimeline(TimelineKind::Draw, info);
+    OnEvent(Event::IncomingPrimitiveBatch, &info);
+}
+
 void DebugContext::Resume() {
     {
         std::lock_guard lock{breakpoint_mutex};
@@ -86,7 +91,7 @@ void DebugContext::ResumeUntilFrame() {
 
 void DebugContext::OnFrameBoundary() {
     ignore_breakpoints_until_frame = false;
-    RecordTimeline(TimelineKind::Frame);
+    RecordTimeline(TimelineKind::Frame, {});
 }
 
 void DebugContext::SetBreakpointCondition(Event event, BreakPointCondition condition) {
@@ -145,7 +150,7 @@ DebugContext::RenderTargetInfo DebugContext::GetRenderTargetInfo() const {
     return render_target;
 }
 
-void DebugContext::RecordTimeline(TimelineKind kind) {
+void DebugContext::RecordTimeline(TimelineKind kind, const DrawInfo& info) {
     std::lock_guard lock{timeline_mutex};
     if (kind == TimelineKind::Draw) {
         ++draw_index;
@@ -165,10 +170,17 @@ void DebugContext::RecordTimeline(TimelineKind kind) {
                    : 0U;
     previous_timeline_target = render_target;
     timeline.push_back(
-        {timeline_sequence++, kind, frame_index, draw_index, changed, render_target});
+        {timeline_sequence++, kind, frame_index, draw_index, changed, render_target, info});
     // NOTE: This history is bounded; use per-frame chunks only if 4096 entries proves too small.
     if (timeline.size() > 4096) {
         timeline.pop_front();
+    }
+    // Metadata only; the independent entry cap also bounds pathological single-frame workloads.
+    if (kind == TimelineKind::Frame) {
+        const u32 frame_limit = timeline_frame_limit.load();
+        while (!timeline.empty() && timeline.front().frame + frame_limit <= frame_index) {
+            timeline.pop_front();
+        }
     }
 }
 
@@ -218,6 +230,15 @@ void DebugContext::ClearTimeline() {
     timeline_sequence = 0;
     frame_index = 0;
     draw_index = 0;
+}
+
+void DebugContext::SetTimelineFrameLimit(u32 frame_limit) {
+    timeline_frame_limit = std::max(1U, frame_limit);
+    std::lock_guard lock{timeline_mutex};
+    frame_limit = timeline_frame_limit.load();
+    while (!timeline.empty() && timeline.front().frame + frame_limit <= frame_index) {
+        timeline.pop_front();
+    }
 }
 
 DebugContext::BreakPointState DebugContext::GetBreakpointState() {

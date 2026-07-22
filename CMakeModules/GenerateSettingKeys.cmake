@@ -33,6 +33,7 @@ foreach(KEY IN ITEMS
     "use_gles"
     "renderer_debug"
     "pica_debugging"
+    "render_debugger_frame_limit"
     "dump_command_buffers"
     "spirv_shader_gen"
     "disable_spirv_optimizer"
