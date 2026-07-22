@@ -50,6 +50,10 @@ private:
                               u32 count, u32 command_id);
     void HandlePicaShader(Packet& packet, PicaShaderOperation operation, u32 generation, u32 start,
                           u32 count, u32 instruction_offset);
+    void HandleDebugState(Packet& packet, DebugStateOperation operation, u32 after_generation,
+                          u32 timeout_ms, u32 reason_mask);
+    void HandleDebugCapture(Packet& packet, DebugCaptureOperation operation, u32 id, u32 argument,
+                            u32 start, u32 count);
     u32 GetEnabledCapabilities() const;
     bool IsPacketTypeEnabled(PacketType packet_type) const;
     bool IsEmulationControlEnabled(EmulationControl operation) const;

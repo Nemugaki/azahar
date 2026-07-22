@@ -184,6 +184,9 @@ public:
     void DoFrameLimiting(std::chrono::microseconds current_system_time_us);
 
     bool IsFrameAdvancing() const;
+    bool IsWaitingForFrameAdvance() const {
+        return waiting_for_advance;
+    }
     /**
      * Sets whether frame advancing is enabled or not.
      * Note: The frontend must cancel frame advancing before shutting down in order
@@ -204,6 +207,7 @@ private:
 
     /// Whether to use frame advancing (i.e. frame by frame)
     std::atomic_bool frame_advancing_enabled;
+    std::atomic_bool waiting_for_advance{};
 
     /// Event to advance the frame when frame advancing is enabled
     Common::Event frame_advance_event;

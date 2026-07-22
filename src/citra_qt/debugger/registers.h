@@ -11,6 +11,7 @@
 class QTreeWidget;
 class QTreeWidgetItem;
 class QComboBox;
+class QLabel;
 class EmuThread;
 
 namespace Ui {
@@ -26,7 +27,7 @@ class RegistersWidget : public QDockWidget {
     Q_OBJECT
 
 public:
-    explicit RegistersWidget(const Core::System& system, QWidget* parent = nullptr);
+    explicit RegistersWidget(Core::System& system, QWidget* parent = nullptr);
     ~RegistersWidget();
 
 public slots:
@@ -37,6 +38,7 @@ public slots:
     void OnEmulationStopping();
 
 private:
+    void RefreshRegisters(bool capture);
     void CreateCPSRChildren();
     void UpdateCPSRValues(u32 value);
 
@@ -44,12 +46,15 @@ private:
     void UpdateVFPSystemRegisterValues(u32 fpscr, u32 fpexc);
 
     std::unique_ptr<Ui::ARMRegisters> cpu_regs_ui;
-    const Core::System& system;
+    Core::System& system;
     QTreeWidget* tree;
     QComboBox* core_selector;
+    QLabel* capture_status;
 
     QTreeWidgetItem* core_registers;
     QTreeWidgetItem* vfp_registers;
     QTreeWidgetItem* vfp_system_registers;
     QTreeWidgetItem* cpsr;
+    u32 current_capture_id{};
+    u32 previous_capture_id{};
 };

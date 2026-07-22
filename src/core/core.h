@@ -6,10 +6,15 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
+#include <deque>
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
+#include <span>
 #include <string>
+#include <vector>
 #include <boost/optional.hpp>
 #include <boost/serialization/version.hpp>
 #include "common/common_types.h"
@@ -80,6 +85,53 @@ namespace Core {
 class ARM_Interface;
 class ExclusiveMonitor;
 class Timing;
+
+enum class DebugPauseReason : u32 {
+    Stopped = 0,
+    Running,
+    User,
+    CPU,
+    Pica,
+    FrameAdvance,
+};
+
+struct DebugState {
+    DebugPauseReason reason{DebugPauseReason::Stopped};
+    u32 detail{};
+    u32 generation{};
+};
+
+struct DebugCaptureHeader {
+    u32 magic{0x50414344}; // "DCAP"
+    u32 version{1};
+    u32 id{};
+    DebugPauseReason reason{DebugPauseReason::Stopped};
+    u32 detail{};
+    u32 core_count{};
+    u32 frame{};
+    u32 draw{};
+    u32 color_address{};
+    u32 depth_address{};
+    u32 width{};
+    u32 height{};
+    u32 color_format{};
+    u32 depth_format{};
+    u32 pica_size{};
+};
+static_assert(sizeof(DebugCaptureHeader) == 0x3C);
+
+struct DebugCaptureInfo {
+    u32 id{};
+    u32 size{};
+    DebugPauseReason reason{DebugPauseReason::Stopped};
+    u32 detail{};
+};
+
+struct DebugCaptureDiff {
+    u32 offset{};
+    u32 before{};
+    u32 after{};
+};
 
 class System {
 public:
@@ -386,6 +438,17 @@ public:
         return cpu_halted;
     }
 
+    void SetDebugState(DebugPauseReason reason, u32 detail = 0);
+    DebugState GetDebugState() const;
+    DebugState WaitForDebugState(u32 after_generation, u32 timeout_ms, u32 reason_mask) const;
+    DebugCaptureInfo CreateDebugCapture();
+    void ClearDebugCaptures();
+    DebugCaptureInfo GetDebugCaptureInfo(u32 id = 0) const;
+    u32 ReadDebugCapture(u32 id, u32 offset, std::span<u8> output) const;
+    std::vector<DebugCaptureDiff> DiffDebugCaptures(u32 before_id, u32 after_id, u32 start,
+                                                    u32 count) const;
+    std::optional<ARM_Interface::RegisterSnapshot> GetDebugCaptureCore(u32 id, u32 core) const;
+
 #ifdef ENABLE_SCRIPTING
     void StartRPCServer(RPC::EmulationControlHandler emulation_control_handler,
                         RPC::ClientCountHandler client_count_handler);
@@ -555,6 +618,17 @@ private:
 
     bool debug_next_process;
     int override_gdb_port = -1;
+
+    struct DebugCaptureRecord {
+        DebugCaptureHeader header;
+        std::vector<ARM_Interface::RegisterSnapshot> cores;
+        std::vector<u8> data;
+    };
+    mutable std::mutex debug_mutex;
+    mutable std::condition_variable debug_changed;
+    DebugState debug_state;
+    std::deque<DebugCaptureRecord> debug_captures;
+    u32 next_debug_capture_id{1};
 
     friend class boost::serialization::access;
     template <typename Archive>

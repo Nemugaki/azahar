@@ -132,6 +132,7 @@ public:
 
     /// Capture PICA state immediately before the next draw, including hardware-accelerated draws.
     void RequestSnapshot();
+    SnapshotInfo CaptureSnapshotNow();
     SnapshotInfo GetSnapshotInfo() const;
     u32 ReadSnapshot(u32 generation, u32 offset, std::span<u8> output) const;
     void ClearSnapshot();
@@ -150,6 +151,7 @@ private:
     void LoadVertices(bool is_indexed);
 
     void CaptureSnapshot();
+    SnapshotInfo BuildSnapshot();
 
     void UpdateDebugRenderTarget();
 

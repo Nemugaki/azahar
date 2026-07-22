@@ -3,23 +3,27 @@
 // Refer to the license.txt file included.
 
 #include <algorithm>
-#include <QTreeWidgetItem>
 #include <QComboBox>
+#include <QLabel>
+#include <QTreeWidgetItem>
 #include "citra_qt/debugger/registers.h"
 #include "citra_qt/util/util.h"
 #include "core/arm/arm_interface.h"
 #include "core/core.h"
 #include "ui_registers.h"
 
-RegistersWidget::RegistersWidget(const Core::System& system_, QWidget* parent)
+RegistersWidget::RegistersWidget(Core::System& system_, QWidget* parent)
     : QDockWidget(parent), cpu_regs_ui(std::make_unique<Ui::ARMRegisters>()), system{system_} {
     cpu_regs_ui->setupUi(this);
 
     tree = cpu_regs_ui->treeWidget;
     core_selector = new QComboBox(this);
     cpu_regs_ui->verticalLayout->insertWidget(0, core_selector);
+    capture_status = new QLabel(tr("Pause the CPU to capture registers"), this);
+    capture_status->setAccessibleName(tr("Register capture status"));
+    cpu_regs_ui->verticalLayout->insertWidget(1, capture_status);
     connect(core_selector, qOverload<int>(&QComboBox::currentIndexChanged), this,
-            [this] { OnDebugModeEntered(); });
+            [this] { RefreshRegisters(false); });
     tree->addTopLevelItem(core_registers = new QTreeWidgetItem(QStringList(tr("Registers"))));
     tree->addTopLevelItem(vfp_registers = new QTreeWidgetItem(QStringList(tr("VFP Registers"))));
     tree->addTopLevelItem(vfp_system_registers =
@@ -68,7 +72,24 @@ RegistersWidget::RegistersWidget(const Core::System& system_, QWidget* parent)
 RegistersWidget::~RegistersWidget() = default;
 
 void RegistersWidget::OnDebugModeEntered() {
+    RefreshRegisters(true);
+}
+
+void RegistersWidget::RefreshRegisters(bool capture) {
     if (!system.IsPoweredOn()) {
+        return;
+    }
+
+    if (capture) {
+        previous_capture_id = current_capture_id;
+        current_capture_id = system.CreateDebugCapture().id;
+        capture_status->setText(current_capture_id
+                                    ? tr("Capture %1; changed values show their previous value")
+                                          .arg(current_capture_id)
+                                    : tr("CPU state is not paused consistently enough to capture"));
+    }
+
+    if (!current_capture_id) {
         return;
     }
 
@@ -76,24 +97,48 @@ void RegistersWidget::OnDebugModeEntered() {
     if (core >= system.GetNumCores()) {
         return;
     }
-    const auto snapshot = system.GetCore(core).GetRegisterSnapshot();
+    const auto snapshot = current_capture_id ? system.GetDebugCaptureCore(current_capture_id, core)
+                                             : std::nullopt;
+    const auto current = snapshot.value_or(system.GetCore(core).GetRegisterSnapshot());
+    const auto previous = previous_capture_id
+                              ? system.GetDebugCaptureCore(previous_capture_id, core)
+                              : std::nullopt;
+    const auto show_change = [](QTreeWidgetItem* item, u32 value, std::optional<u32> old_value) {
+        const bool changed = old_value && *old_value != value;
+        item->setText(2, changed ? QStringLiteral("0x%1").arg(*old_value, 8, 16, QLatin1Char('0'))
+                                 : QString{});
+        item->setToolTip(1, changed ? QObject::tr("Changed since the previous debugger capture")
+                                    : QString{});
+        item->setBackground(1, changed ? QBrush(QColor(0xFF, 0xF2, 0x99)) : QBrush{});
+    };
     for (int i = 0; i < core_registers->childCount(); ++i) {
         core_registers->child(i)->setText(
-            1, QStringLiteral("0x%1").arg(snapshot.core[i], 8, 16, QLatin1Char('0')));
+            1, QStringLiteral("0x%1").arg(current.core[i], 8, 16, QLatin1Char('0')));
+        show_change(core_registers->child(i), current.core[i],
+                    previous ? std::optional<u32>{previous->core[i]} : std::nullopt);
     }
 
     for (int i = 0; i < vfp_registers->childCount(); ++i) {
         vfp_registers->child(i)->setText(
-            1, QStringLiteral("0x%1").arg(snapshot.vfp[i], 8, 16, QLatin1Char('0')));
+            1, QStringLiteral("0x%1").arg(current.vfp[i], 8, 16, QLatin1Char('0')));
+        show_change(vfp_registers->child(i), current.vfp[i],
+                    previous ? std::optional<u32>{previous->vfp[i]} : std::nullopt);
     }
 
-    UpdateCPSRValues(snapshot.cpsr);
-    UpdateVFPSystemRegisterValues(snapshot.fpscr, snapshot.fpexc);
+    UpdateCPSRValues(current.cpsr);
+    show_change(cpsr, current.cpsr,
+                previous ? std::optional<u32>{previous->cpsr} : std::nullopt);
+    UpdateVFPSystemRegisterValues(current.fpscr, current.fpexc);
+    show_change(vfp_system_registers->child(0), current.fpscr,
+                previous ? std::optional<u32>{previous->fpscr} : std::nullopt);
+    show_change(vfp_system_registers->child(1), current.fpexc,
+                previous ? std::optional<u32>{previous->fpexc} : std::nullopt);
 }
 
 void RegistersWidget::OnDebugModeLeft() {}
 
 void RegistersWidget::OnEmulationStarting(EmuThread* emu_thread) {
+    capture_status->setText(tr("Pause the CPU to capture registers"));
     core_selector->clear();
     for (u32 core = 0; core < system.GetNumCores(); ++core) {
         core_selector->addItem(tr("Core %1").arg(core));
@@ -102,14 +147,19 @@ void RegistersWidget::OnEmulationStarting(EmuThread* emu_thread) {
 }
 
 void RegistersWidget::OnEmulationStopping() {
+    current_capture_id = 0;
+    previous_capture_id = 0;
+    capture_status->setText(tr("No title running"));
     core_selector->clear();
     // Reset widget text
     for (int i = 0; i < core_registers->childCount(); ++i) {
         core_registers->child(i)->setText(1, QString{});
+        core_registers->child(i)->setText(2, QString{});
     }
 
     for (int i = 0; i < vfp_registers->childCount(); ++i) {
         vfp_registers->child(i)->setText(1, QString{});
+        vfp_registers->child(i)->setText(2, QString{});
     }
 
     for (int i = 0; i < cpsr->childCount(); ++i) {

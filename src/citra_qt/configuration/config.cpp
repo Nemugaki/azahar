@@ -534,6 +534,7 @@ void QtConfig::ReadDebuggingValues() {
     ReadBasicSetting(Settings::values.rpc_allow_pica_breakpoints);
     ReadBasicSetting(Settings::values.rpc_allow_pica_command_list);
     ReadBasicSetting(Settings::values.rpc_allow_pica_vertex_shader);
+    ReadBasicSetting(Settings::values.debugger_cache_mb);
     ReadBasicSetting(Settings::values.toggle_unique_data_console_type);
     ReadBasicSetting(Settings::values.break_on_unmapped_memory_access);
 
@@ -1136,6 +1137,7 @@ void QtConfig::SaveDebuggingValues() {
     WriteBasicSetting(Settings::values.rpc_allow_pica_breakpoints);
     WriteBasicSetting(Settings::values.rpc_allow_pica_command_list);
     WriteBasicSetting(Settings::values.rpc_allow_pica_vertex_shader);
+    WriteBasicSetting(Settings::values.debugger_cache_mb);
     WriteBasicSetting(Settings::values.toggle_unique_data_console_type);
     WriteBasicSetting(Settings::values.break_on_unmapped_memory_access);
 

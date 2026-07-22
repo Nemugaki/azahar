@@ -2,6 +2,8 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
+#include <algorithm>
+#include <cstring>
 #include <stdexcept>
 #include <utility>
 #include <boost/serialization/array.hpp>
@@ -54,6 +56,8 @@
 #include "network/network.h"
 #include "video_core/custom_textures/custom_tex_manager.h"
 #include "video_core/gpu.h"
+#include "video_core/debug_utils/debug_utils.h"
+#include "video_core/pica/pica_core.h"
 #include "video_core/renderer_base.h"
 
 namespace Core {
@@ -78,6 +82,201 @@ Core::Timing& Global() {
 System::System() : movie{*this}, cheat_engine{*this} {}
 
 System::~System() = default;
+
+void System::SetDebugState(DebugPauseReason reason, u32 detail) {
+    {
+        std::lock_guard lock{debug_mutex};
+        if (debug_state.reason == reason && debug_state.detail == detail) {
+            return;
+        }
+        debug_state = {reason, detail, debug_state.generation + 1};
+    }
+    debug_changed.notify_all();
+}
+
+DebugState System::GetDebugState() const {
+    std::lock_guard lock{debug_mutex};
+    return debug_state;
+}
+
+DebugState System::WaitForDebugState(u32 after_generation, u32 timeout_ms,
+                                     u32 reason_mask) const {
+    std::unique_lock lock{debug_mutex};
+    const auto matches = [&] {
+        const u32 reason = static_cast<u32>(debug_state.reason);
+        return debug_state.generation != after_generation &&
+               (!reason_mask || (reason < 32 && (reason_mask & (1U << reason))));
+    };
+    debug_changed.wait_for(lock, std::chrono::milliseconds(std::min(timeout_ms, 60000U)), matches);
+    return debug_state;
+}
+
+DebugCaptureInfo System::CreateDebugCapture() {
+    const auto before = GetDebugState();
+    if (before.reason == DebugPauseReason::Stopped || before.reason == DebugPauseReason::Running ||
+        !IsPoweredOn()) {
+        return {};
+    }
+    const bool stable = before.reason == DebugPauseReason::CPU
+                            ? IsCPUHalted()
+                        : before.reason == DebugPauseReason::Pica
+                            ? Pica::g_debug_context &&
+                                  Pica::g_debug_context->GetBreakpointState().at_breakpoint
+                            : frame_limiter.IsWaitingForFrameAdvance();
+    if (!stable) {
+        return {};
+    }
+
+    DebugCaptureRecord capture;
+    {
+        std::lock_guard lock{debug_mutex};
+        capture.header.id = next_debug_capture_id++;
+    }
+    capture.header.reason = before.reason;
+    capture.header.detail = before.detail;
+    capture.header.core_count = GetNumCores();
+    capture.cores.reserve(capture.header.core_count);
+    for (u32 core = 0; core < capture.header.core_count; ++core) {
+        capture.cores.push_back(GetCore(core).GetRegisterSnapshot());
+    }
+
+    auto& pica = GPU().PicaCore();
+    const auto pica_info = pica.CaptureSnapshotNow();
+    std::vector<u8> pica_data(pica_info.size);
+    pica.ReadSnapshot(pica_info.generation, 0, pica_data);
+
+    if (Pica::g_debug_context) {
+        const auto target = Pica::g_debug_context->GetRenderTargetInfo();
+        const auto position = Pica::g_debug_context->GetTimelinePosition();
+        capture.header.frame = position.frame;
+        capture.header.draw = position.draw;
+        capture.header.color_address = target.color_address;
+        capture.header.depth_address = target.depth_address;
+        capture.header.width = target.width;
+        capture.header.height = target.height;
+        capture.header.color_format = target.color_format;
+        capture.header.depth_format = target.depth_format;
+    }
+    capture.header.pica_size = static_cast<u32>(pica_data.size());
+
+    const auto append = [&capture](const void* source, std::size_t size) {
+        if (!size) {
+            return;
+        }
+        const auto* bytes = static_cast<const u8*>(source);
+        capture.data.insert(capture.data.end(), bytes, bytes + size);
+    };
+    append(&capture.header, sizeof(capture.header));
+    append(capture.cores.data(), capture.cores.size() * sizeof(capture.cores.front()));
+    append(pica_data.data(), pica_data.size());
+
+    if (GetDebugState().generation != before.generation) {
+        return {};
+    }
+    const DebugCaptureInfo info{capture.header.id, static_cast<u32>(capture.data.size()),
+                                capture.header.reason, capture.header.detail};
+    {
+        std::lock_guard lock{debug_mutex};
+        const std::size_t limit =
+            static_cast<std::size_t>(Settings::values.debugger_cache_mb.GetValue()) * 1024 * 1024;
+        if (capture.data.size() > limit) {
+            return {};
+        }
+        std::size_t used{};
+        for (const auto& entry : debug_captures) {
+            used += entry.data.size();
+        }
+        while (!debug_captures.empty() && used + capture.data.size() > limit) {
+            used -= debug_captures.front().data.size();
+            debug_captures.pop_front();
+        }
+        debug_captures.push_back(std::move(capture));
+    }
+    return info;
+}
+
+void System::ClearDebugCaptures() {
+    std::lock_guard lock{debug_mutex};
+    debug_captures.clear();
+}
+
+DebugCaptureInfo System::GetDebugCaptureInfo(u32 id) const {
+    std::lock_guard lock{debug_mutex};
+    if (!id && !debug_captures.empty()) {
+        const auto& capture = debug_captures.back();
+        return {capture.header.id, static_cast<u32>(capture.data.size()), capture.header.reason,
+                capture.header.detail};
+    }
+    const auto capture = std::ranges::find_if(debug_captures, [id](const auto& entry) {
+        return entry.header.id == id;
+    });
+    if (capture == debug_captures.end()) {
+        return {};
+    }
+    return {capture->header.id, static_cast<u32>(capture->data.size()), capture->header.reason,
+            capture->header.detail};
+}
+
+u32 System::ReadDebugCapture(u32 id, u32 offset, std::span<u8> output) const {
+    std::lock_guard lock{debug_mutex};
+    const auto capture = std::ranges::find_if(
+        debug_captures, [id](const auto& entry) { return entry.header.id == id; });
+    if (capture == debug_captures.end() || offset >= capture->data.size()) {
+        return 0;
+    }
+    const u32 size = std::min(static_cast<u32>(output.size()),
+                              static_cast<u32>(capture->data.size() - offset));
+    std::memcpy(output.data(), capture->data.data() + offset, size);
+    return size;
+}
+
+std::vector<DebugCaptureDiff> System::DiffDebugCaptures(u32 before_id, u32 after_id, u32 start,
+                                                        u32 count) const {
+    std::lock_guard lock{debug_mutex};
+    const auto find = [this](u32 id) {
+        return std::ranges::find_if(
+            debug_captures, [id](const auto& entry) { return entry.header.id == id; });
+    };
+    const auto before = find(before_id);
+    const auto after = find(after_id);
+    std::vector<DebugCaptureDiff> result;
+    if (before == debug_captures.end() || after == debug_captures.end()) {
+        return result;
+    }
+    const std::size_t size = std::max(before->data.size(), after->data.size());
+    u32 changed_index{};
+    for (std::size_t offset = 0; offset < size && result.size() < count; offset += sizeof(u32)) {
+        u32 old_value{};
+        u32 new_value{};
+        if (offset + sizeof(u32) <= before->data.size()) {
+            std::memcpy(&old_value, before->data.data() + offset, sizeof(old_value));
+        }
+        if (offset + sizeof(u32) <= after->data.size()) {
+            std::memcpy(&new_value, after->data.data() + offset, sizeof(new_value));
+        }
+        if (old_value != new_value && changed_index++ >= start) {
+            result.push_back({static_cast<u32>(offset), old_value, new_value});
+        }
+    }
+    return result;
+}
+
+std::optional<ARM_Interface::RegisterSnapshot> System::GetDebugCaptureCore(u32 id, u32 core) const {
+    std::lock_guard lock{debug_mutex};
+    if (!id && !debug_captures.empty()) {
+        const auto& capture = debug_captures.back();
+        return core < capture.cores.size()
+                   ? std::optional<ARM_Interface::RegisterSnapshot>{capture.cores[core]}
+                   : std::nullopt;
+    }
+    const auto capture = std::ranges::find_if(debug_captures, [id](const auto& entry) {
+        return entry.header.id == id;
+    });
+    if (capture == debug_captures.end() || core >= capture->cores.size()) {
+        return std::nullopt;
+    }
+    return capture->cores[core];
+}
 
 #ifdef ENABLE_SCRIPTING
 void System::StartRPCServer(RPC::EmulationControlHandler emulation_control_handler,

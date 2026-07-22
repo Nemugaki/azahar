@@ -28,6 +28,8 @@ enum class PacketType : u32 {
     PicaShader = 12,
     PicaTimeline = 13,
     PicaRenderTarget = 14,
+    DebugState = 15,
+    DebugCapture = 16,
 };
 
 enum class EmulationControl : u32 {
@@ -92,6 +94,29 @@ enum class PicaShaderOperation : u32 {
     ReadDump = 2,
     ReadCycles = 3,
     Clear = 4,
+};
+
+enum class DebugStateOperation : u32 { Status = 0, Wait = 1 };
+
+enum class DebugCaptureOperation : u32 { Create = 0, Status = 1, Read = 2, Diff = 3 };
+
+struct DebugStateReply {
+    u32 reason;
+    u32 detail;
+    u32 generation;
+};
+
+struct DebugCaptureReply {
+    u32 id;
+    u32 size;
+    u32 reason;
+    u32 detail;
+};
+
+struct DebugCaptureDiffReply {
+    u32 offset;
+    u32 before;
+    u32 after;
 };
 
 struct PicaShaderStatus {

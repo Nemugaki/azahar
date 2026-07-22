@@ -669,6 +669,7 @@ struct Values {
     Setting<bool> rpc_allow_pica_breakpoints{true, Keys::rpc_allow_pica_breakpoints};
     Setting<bool> rpc_allow_pica_command_list{true, Keys::rpc_allow_pica_command_list};
     Setting<bool> rpc_allow_pica_vertex_shader{true, Keys::rpc_allow_pica_vertex_shader};
+    Setting<u32> debugger_cache_mb{256, Keys::debugger_cache_mb};
     Setting<bool> toggle_unique_data_console_type{false, Keys::toggle_unique_data_console_type};
     Setting<bool> break_on_unmapped_memory_access{false, Keys::break_on_unmapped_memory_access};
 

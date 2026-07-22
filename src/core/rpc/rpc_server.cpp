@@ -218,6 +218,11 @@ bool RPCServer::IsPacketTypeEnabled(PacketType packet_type) const {
         return capabilities & CAPABILITY_PICA_SNAPSHOT;
     case PacketType::PicaShader:
         return capabilities & CAPABILITY_PICA_SHADER;
+    case PacketType::DebugState:
+        return capabilities & CAPABILITY_EMULATION_CONTROL;
+    case PacketType::DebugCapture:
+        return (capabilities & (CAPABILITY_CPU_REGISTERS | CAPABILITY_PICA_SNAPSHOT)) ==
+               (CAPABILITY_CPU_REGISTERS | CAPABILITY_PICA_SNAPSHOT);
     default:
         return false;
     }
@@ -440,6 +445,54 @@ void RPCServer::HandleCPURegisters(Packet& packet, u32 core, u32 bank, u32 start
         written += sizeof(value);
     }
     packet.SetPacketDataSize(written);
+    packet.SendReply();
+}
+
+void RPCServer::HandleDebugState(Packet& packet, DebugStateOperation operation,
+                                 u32 after_generation, u32 timeout_ms, u32 reason_mask) {
+    // NOTE: Waits occupy the single RPC worker. Dispatch waiters separately if concurrent commands
+    // during a wait become a real workflow.
+    const auto state = operation == DebugStateOperation::Wait
+                           ? system.WaitForDebugState(after_generation, timeout_ms, reason_mask)
+                           : system.GetDebugState();
+    const DebugStateReply reply{static_cast<u32>(state.reason), state.detail, state.generation};
+    std::memcpy(packet.GetPacketData().data(), &reply, sizeof(reply));
+    packet.SetPacketDataSize(sizeof(reply));
+    packet.SendReply();
+}
+
+void RPCServer::HandleDebugCapture(Packet& packet, DebugCaptureOperation operation, u32 id,
+                                   u32 argument, u32 start, u32 count) {
+    if (operation == DebugCaptureOperation::Read) {
+        packet.SetPacketDataSize(system.ReadDebugCapture(
+            id, argument, packet.GetPacketData().first(std::min(count, MAX_PACKET_DATA_SIZE))));
+        packet.SendReply();
+        return;
+    }
+    if (operation == DebugCaptureOperation::Diff) {
+        const u32 max_entries =
+            (MAX_PACKET_DATA_SIZE - sizeof(u32)) / sizeof(DebugCaptureDiffReply);
+        const auto changes = system.DiffDebugCaptures(id, argument, start,
+                                                       std::min(count, max_entries));
+        const u32 returned = static_cast<u32>(changes.size());
+        std::memcpy(packet.GetPacketData().data(), &returned, sizeof(returned));
+        for (u32 index = 0; index < returned; ++index) {
+            const DebugCaptureDiffReply reply{changes[index].offset, changes[index].before,
+                                               changes[index].after};
+            std::memcpy(packet.GetPacketData().data() + sizeof(returned) + index * sizeof(reply),
+                        &reply, sizeof(reply));
+        }
+        packet.SetPacketDataSize(sizeof(returned) + returned * sizeof(DebugCaptureDiffReply));
+        packet.SendReply();
+        return;
+    }
+
+    const auto info = operation == DebugCaptureOperation::Create
+                          ? system.CreateDebugCapture()
+                          : system.GetDebugCaptureInfo(id);
+    const DebugCaptureReply reply{info.id, info.size, static_cast<u32>(info.reason), info.detail};
+    std::memcpy(packet.GetPacketData().data(), &reply, sizeof(reply));
+    packet.SetPacketDataSize(sizeof(reply));
     packet.SendReply();
 }
 
@@ -673,6 +726,8 @@ bool RPCServer::ValidatePacket(const PacketHeader& packet_header) {
         case PacketType::PicaShader:
         case PacketType::PicaTimeline:
         case PacketType::PicaRenderTarget:
+        case PacketType::DebugState:
+        case PacketType::DebugCapture:
             return packet_header.packet_size >= sizeof(u32);
         default:
             break;
@@ -791,6 +846,38 @@ void RPCServer::HandleSingleRequest(std::unique_ptr<Packet> request_packet) {
             HandlePicaRenderTarget(*request_packet);
             success = true;
             break;
+        case PacketType::DebugState: {
+            u32 arg3 = 0;
+            u32 arg4 = 0;
+            if (request_packet->GetPacketDataSize() >= 3 * sizeof(u32)) {
+                std::memcpy(&arg3, packet_data.data() + 2 * sizeof(u32), sizeof(arg3));
+            }
+            if (request_packet->GetPacketDataSize() >= 4 * sizeof(u32)) {
+                std::memcpy(&arg4, packet_data.data() + 3 * sizeof(u32), sizeof(arg4));
+            }
+            HandleDebugState(*request_packet, static_cast<DebugStateOperation>(arg1), arg2, arg3,
+                             arg4);
+            success = true;
+            break;
+        }
+        case PacketType::DebugCapture: {
+            u32 arg3 = 0;
+            u32 arg4 = 0;
+            u32 arg5 = 0;
+            if (request_packet->GetPacketDataSize() >= 3 * sizeof(u32)) {
+                std::memcpy(&arg3, packet_data.data() + 2 * sizeof(u32), sizeof(arg3));
+            }
+            if (request_packet->GetPacketDataSize() >= 4 * sizeof(u32)) {
+                std::memcpy(&arg4, packet_data.data() + 3 * sizeof(u32), sizeof(arg4));
+            }
+            if (request_packet->GetPacketDataSize() >= 5 * sizeof(u32)) {
+                std::memcpy(&arg5, packet_data.data() + 4 * sizeof(u32), sizeof(arg5));
+            }
+            HandleDebugCapture(*request_packet, static_cast<DebugCaptureOperation>(arg1), arg2,
+                               arg3, arg4, arg5);
+            success = true;
+            break;
+        }
         case PacketType::PicaTrace: {
             u32 arg3 = 0;
             u32 arg4 = 0;

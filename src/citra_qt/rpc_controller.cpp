@@ -75,13 +75,13 @@ Core::RPC::EmulationControlReply RPCController::HandleEmulationControl(
 }
 
 Core::RPC::EmulationState RPCController::State() const {
-    if (!main_window.emulation_running || !main_window.emu_thread) {
+    const auto reason = main_window.PauseReason();
+    const u32 detail = reason == Core::DebugPauseReason::Pica ? system.GetDebugState().detail : 0;
+    system.SetDebugState(reason, detail);
+    if (reason == Core::DebugPauseReason::Stopped) {
         return Core::RPC::EmulationState::Stopped;
     }
-    const bool at_pica_breakpoint =
-        Pica::g_debug_context && Pica::g_debug_context->GetBreakpointState().at_breakpoint;
-    if (!main_window.emu_thread->IsRunning() || system.frame_limiter.IsFrameAdvancing() ||
-        at_pica_breakpoint) {
+    if (reason != Core::DebugPauseReason::Running) {
         return Core::RPC::EmulationState::Paused;
     }
     return Core::RPC::EmulationState::Running;
@@ -113,8 +113,8 @@ Core::RPC::EmulationControlReply RPCController::Execute(Core::RPC::EmulationCont
     case Core::RPC::EmulationControl::Resume:
         if (State() != Core::RPC::EmulationState::Paused) {
             reply.result = Core::RPC::EmulationResult::InvalidState;
-        } else {
-            main_window.OnResumeGame(false);
+        } else if (!main_window.ResumeEmulation()) {
+            reply.result = Core::RPC::EmulationResult::Failed;
         }
         break;
     case Core::RPC::EmulationControl::Stop:
@@ -140,13 +140,14 @@ Core::RPC::EmulationControlReply RPCController::Execute(Core::RPC::EmulationCont
             reply.result = Core::RPC::EmulationResult::InvalidState;
         } else {
             main_window.emu_thread->SetRunning(false);
+            system.SetDebugState(Core::DebugPauseReason::CPU);
         }
         break;
     case Core::RPC::EmulationControl::DebugResume:
-        if (!main_window.emu_thread || main_window.emu_thread->IsRunning()) {
+        if (main_window.PauseReason() != Core::DebugPauseReason::CPU) {
             reply.result = Core::RPC::EmulationResult::InvalidState;
-        } else {
-            main_window.emu_thread->SetRunning(true);
+        } else if (!main_window.ResumeEmulation()) {
+            reply.result = Core::RPC::EmulationResult::Failed;
         }
         break;
     case Core::RPC::EmulationControl::SaveState:

@@ -750,7 +750,8 @@ void GMainWindow::InitializeDebugWidgets() {
         graphicsCommandsWidget->hide();
         debug_menu->addAction(graphicsCommandsWidget->toggleViewAction());
 
-        graphicsBreakpointsWidget = new GraphicsBreakPointsWidget(Pica::g_debug_context, this);
+        graphicsBreakpointsWidget =
+            new GraphicsBreakPointsWidget(system, Pica::g_debug_context, this);
         addDockWidget(Qt::RightDockWidgetArea, graphicsBreakpointsWidget);
         graphicsBreakpointsWidget->hide();
         debug_menu->addAction(graphicsBreakpointsWidget->toggleViewAction());
@@ -1215,12 +1216,11 @@ void GMainWindow::ConnectMenuEvents() {
     connect_menu(ui->action_Debug_Pause, [this] {
         if (emu_thread) {
             emu_thread->SetRunning(false);
+            system.SetDebugState(Core::DebugPauseReason::CPU);
         }
     });
     connect_menu(ui->action_Debug_Resume, [this] {
-        if (emu_thread) {
-            emu_thread->SetRunning(true);
-        }
+        ResumeEmulation();
     });
     connect_menu(ui->action_Debug_Step, [this] {
         if (emu_thread) {
@@ -1248,10 +1248,9 @@ void GMainWindow::ConnectMenuEvents() {
 }
 
 void GMainWindow::UpdateMenuState() {
-    const bool at_pica_breakpoint =
-        Pica::g_debug_context && Pica::g_debug_context->GetBreakpointState().at_breakpoint;
-    const bool is_paused = !emu_thread || !emu_thread->IsRunning() ||
-                           system.frame_limiter.IsFrameAdvancing() || at_pica_breakpoint;
+    const auto pause_reason = PauseReason();
+    const bool is_paused = pause_reason != Core::DebugPauseReason::Running &&
+                           pause_reason != Core::DebugPauseReason::Stopped;
 
     const std::array running_actions{
         ui->action_Stop,
@@ -1724,6 +1723,8 @@ void GMainWindow::ShutdownGame() {
     UpdateSaveStates();
 
     emulation_running = false;
+    system.SetDebugState(Core::DebugPauseReason::Stopped);
+    system.ClearDebugCaptures();
 
     game_title.clear();
     UpdateWindowTitle();
@@ -2624,6 +2625,7 @@ void GMainWindow::OnResumeGame(bool first_start) {
 
     emu_thread->SetRunning(true);
     system.frame_limiter.SetFrameAdvancing(false);
+    system.SetDebugState(Core::DebugPauseReason::Running);
     graphics_api_button->setEnabled(false);
     qRegisterMetaType<Core::System::ResultStatus>("Core::System::ResultStatus");
     qRegisterMetaType<std::string>("std::string");
@@ -2658,6 +2660,7 @@ void GMainWindow::OnRestartGame() {
 
 void GMainWindow::OnPauseGame() {
     system.frame_limiter.SetFrameAdvancing(true);
+    system.SetDebugState(Core::DebugPauseReason::User);
     qt_cameras->PauseCameras();
 
     play_time_manager->Stop();
@@ -2675,24 +2678,60 @@ bool GMainWindow::AdvanceFrame() {
         return false;
     }
 
-    const bool was_frame_paused = system.frame_limiter.IsFrameAdvancing();
-    const bool cpu_paused = !emu_thread->IsRunning();
-    const auto pica_state = Pica::g_debug_context
-                                ? Pica::g_debug_context->GetBreakpointState()
-                                : Pica::DebugContext::BreakPointState{};
-    if (!was_frame_paused && !cpu_paused && !pica_state.at_breakpoint) {
+    const auto reason = PauseReason();
+    if (reason == Core::DebugPauseReason::Running || reason == Core::DebugPauseReason::Stopped) {
         return false;
     }
 
     system.frame_limiter.SetFrameAdvancing(true);
-    if (pica_state.at_breakpoint) {
+    if (reason == Core::DebugPauseReason::Pica) {
         Pica::g_debug_context->ResumeUntilFrame();
     }
-    if (cpu_paused) {
+    if (reason == Core::DebugPauseReason::CPU) {
         emu_thread->SetRunning(true);
     }
-    if (was_frame_paused) {
+    if (reason == Core::DebugPauseReason::User ||
+        reason == Core::DebugPauseReason::FrameAdvance) {
         system.frame_limiter.AdvanceFrame();
+    }
+    system.SetDebugState(Core::DebugPauseReason::FrameAdvance);
+    UpdateMenuState();
+    return true;
+}
+
+Core::DebugPauseReason GMainWindow::PauseReason() const {
+    if (!emulation_running || !emu_thread) {
+        return Core::DebugPauseReason::Stopped;
+    }
+    if (Pica::g_debug_context && Pica::g_debug_context->GetBreakpointState().at_breakpoint) {
+        return Core::DebugPauseReason::Pica;
+    }
+    if (!emu_thread->IsRunning()) {
+        return Core::DebugPauseReason::CPU;
+    }
+    if (system.frame_limiter.IsFrameAdvancing()) {
+        const auto reason = system.GetDebugState().reason;
+        return reason == Core::DebugPauseReason::User ? reason
+                                                       : Core::DebugPauseReason::FrameAdvance;
+    }
+    return Core::DebugPauseReason::Running;
+}
+
+bool GMainWindow::ResumeEmulation() {
+    switch (PauseReason()) {
+    case Core::DebugPauseReason::Pica:
+        Pica::g_debug_context->Resume();
+        break;
+    case Core::DebugPauseReason::CPU:
+        emu_thread->SetRunning(true);
+        system.SetDebugState(Core::DebugPauseReason::Running);
+        break;
+    case Core::DebugPauseReason::User:
+    case Core::DebugPauseReason::FrameAdvance:
+        OnResumeGame(false);
+        break;
+    default:
+        return false;
     }
     UpdateMenuState();
     return true;
@@ -2700,10 +2739,10 @@ bool GMainWindow::AdvanceFrame() {
 
 void GMainWindow::OnPauseContinueGame() {
     if (emulation_running) {
-        if (emu_thread->IsRunning() && !system.frame_limiter.IsFrameAdvancing()) {
+        if (PauseReason() == Core::DebugPauseReason::Running) {
             OnPauseGame();
         } else {
-            OnResumeGame(false);
+            ResumeEmulation();
         }
     }
 }

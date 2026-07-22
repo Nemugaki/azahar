@@ -97,6 +97,15 @@ void PicaCore::CaptureSnapshot() {
     if (!snapshot_requested.exchange(false)) {
         return;
     }
+    BuildSnapshot();
+}
+
+PicaCore::SnapshotInfo PicaCore::CaptureSnapshotNow() {
+    snapshot_requested = false;
+    return BuildSnapshot();
+}
+
+PicaCore::SnapshotInfo PicaCore::BuildSnapshot() {
 
     struct Section {
         u32 offset;
@@ -154,6 +163,7 @@ void PicaCore::CaptureSnapshot() {
     header.generation = ++snapshot_generation;
     std::memcpy(data.data(), std::addressof(header), sizeof(header));
     snapshot = std::move(data);
+    return {snapshot_generation, static_cast<u32>(snapshot.size())};
 }
 
 void PicaCore::InitializeRegs() {

@@ -152,6 +152,7 @@ void ConfigureDebug::SetConfiguration() {
         Settings::values.rpc_allow_pica_command_list.GetValue());
     ui->rpc_allow_pica_vertex_shader->setChecked(
         Settings::values.rpc_allow_pica_vertex_shader.GetValue());
+    ui->debugger_cache_mb->setValue(Settings::values.debugger_cache_mb.GetValue());
 #ifndef ENABLE_SCRIPTING
     ui->rpc_groupbox->setVisible(false);
 #endif // !ENABLE_SCRIPTING
@@ -214,6 +215,7 @@ void ConfigureDebug::ApplyConfiguration() {
     Settings::values.rpc_allow_pica_breakpoints = ui->rpc_allow_pica_breakpoints->isChecked();
     Settings::values.rpc_allow_pica_command_list = ui->rpc_allow_pica_command_list->isChecked();
     Settings::values.rpc_allow_pica_vertex_shader = ui->rpc_allow_pica_vertex_shader->isChecked();
+    Settings::values.debugger_cache_mb = static_cast<u32>(ui->debugger_cache_mb->value());
     Settings::values.toggle_unique_data_console_type =
         ui->toggle_unique_data_console_type->isChecked();
     Settings::values.break_on_unmapped_memory_access =

@@ -210,7 +210,9 @@ double PerfStats::GetStableFrameTimeScale() const {
 void FrameLimiter::WaitOnce() {
     if (frame_advancing_enabled) {
         // Frame advancing is enabled: wait on event instead of doing framelimiting
+        waiting_for_advance = true;
         frame_advance_event.Wait();
+        waiting_for_advance = false;
         frame_advance_event.Reset();
     }
 }
@@ -218,7 +220,9 @@ void FrameLimiter::WaitOnce() {
 void FrameLimiter::DoFrameLimiting(microseconds current_system_time_us) {
     if (frame_advancing_enabled) {
         // Frame advancing is enabled: wait on event instead of doing framelimiting
+        waiting_for_advance = true;
         frame_advance_event.Wait();
+        waiting_for_advance = false;
         frame_advance_event.Reset();
         return;
     }

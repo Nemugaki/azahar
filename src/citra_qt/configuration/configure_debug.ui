@@ -408,6 +408,46 @@
         </property>
        </widget>
       </item>
+      <item row="7" column="0">
+       <layout class="QHBoxLayout" name="debugger_cache_layout">
+        <item>
+         <widget class="QLabel" name="debugger_cache_label">
+          <property name="text">
+           <string>Debugger history cache:</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QSpinBox" name="debugger_cache_mb">
+          <property name="toolTip">
+           <string>Maximum memory retained for debugger captures and render history. Oldest entries are removed first.</string>
+          </property>
+          <property name="minimum">
+           <number>16</number>
+          </property>
+          <property name="maximum">
+           <number>4096</number>
+          </property>
+          <property name="suffix">
+           <string> MiB</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <spacer name="debugger_cache_spacer">
+          <property name="orientation">
+           <enum>Qt::Horizontal</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+           <size>
+            <width>40</width>
+            <height>20</height>
+           </size>
+          </property>
+         </spacer>
+        </item>
+       </layout>
+      </item>
      </layout>
     </widget>
    </item>

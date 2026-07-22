@@ -11,8 +11,14 @@
 class QLabel;
 class QPushButton;
 class QTreeView;
+class QComboBox;
+class QLineEdit;
 
 class BreakPointModel;
+
+namespace Core {
+class System;
+}
 
 class GraphicsBreakPointsWidget : public QDockWidget, Pica::DebugContext::BreakPointObserver {
     Q_OBJECT
@@ -20,7 +26,8 @@ class GraphicsBreakPointsWidget : public QDockWidget, Pica::DebugContext::BreakP
     using Event = Pica::DebugContext::Event;
 
 public:
-    explicit GraphicsBreakPointsWidget(std::shared_ptr<Pica::DebugContext> debug_context,
+    explicit GraphicsBreakPointsWidget(Core::System& system,
+                                       std::shared_ptr<Pica::DebugContext> debug_context,
                                        QWidget* parent = nullptr);
 
     void OnPicaBreakPointHit(Pica::DebugContext::Event event, const void* data) override;
@@ -37,11 +44,22 @@ private:
     void OnItemDoubleClicked(const QModelIndex&);
     void OnResumeRequested();
     void OnResumed();
+    void LoadCondition(const QModelIndex& index);
+    void ApplyCondition();
+    void UseCurrentConditionValue();
+    void CaptureState();
 
     QLabel* status_text;
     QPushButton* resume_button;
     QPushButton* frame_advance_button;
+    QPushButton* capture_button;
 
     BreakPointModel* breakpoint_model;
     QTreeView* breakpoint_list;
+    QComboBox* condition_field;
+    QLineEdit* condition_value;
+    QLineEdit* condition_mask;
+    QPushButton* condition_current;
+    QLabel* condition_error;
+    Core::System& system;
 };

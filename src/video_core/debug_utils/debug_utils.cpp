@@ -44,6 +44,8 @@ void DebugContext::DoOnEvent(Event event, const void* data) {
         if (vertex_input_valid) {
             std::memcpy(std::addressof(vertex_input), data, sizeof(vertex_input));
         }
+        Core::System::GetInstance().SetDebugState(Core::DebugPauseReason::Pica,
+                                                  static_cast<u32>(event));
     }
 
     for (auto& breakpoint_observer : breakpoint_observers) {
@@ -64,6 +66,8 @@ void DebugContext::Resume() {
         at_breakpoint = false;
     }
 
+    Core::System::GetInstance().SetDebugState(Core::DebugPauseReason::Running);
+
     {
         std::lock_guard lock{observer_mutex};
         for (auto& breakpoint_observer : breakpoint_observers) {
@@ -77,6 +81,7 @@ void DebugContext::Resume() {
 void DebugContext::ResumeUntilFrame() {
     ignore_breakpoints_until_frame = true;
     Resume();
+    Core::System::GetInstance().SetDebugState(Core::DebugPauseReason::FrameAdvance);
 }
 
 void DebugContext::OnFrameBoundary() {
@@ -161,7 +166,7 @@ void DebugContext::RecordTimeline(TimelineKind kind) {
     previous_timeline_target = render_target;
     timeline.push_back(
         {timeline_sequence++, kind, frame_index, draw_index, changed, render_target});
-    // ponytail: bounded global history; use per-frame chunks only if 4096 entries proves too small.
+    // NOTE: This history is bounded; use per-frame chunks only if 4096 entries proves too small.
     if (timeline.size() > 4096) {
         timeline.pop_front();
     }
@@ -199,6 +204,11 @@ std::vector<DebugContext::TimelineEntry> DebugContext::GetTimeline(u32 start, u3
 u32 DebugContext::GetTimelineCount() const {
     std::lock_guard lock{timeline_mutex};
     return static_cast<u32>(timeline.size());
+}
+
+DebugContext::TimelinePosition DebugContext::GetTimelinePosition() const {
+    std::lock_guard lock{timeline_mutex};
+    return {frame_index, draw_index};
 }
 
 void DebugContext::ClearTimeline() {

@@ -153,6 +153,11 @@ public:
         RenderTargetInfo target{};
     };
 
+    struct TimelinePosition {
+        u32 frame{};
+        u32 draw{};
+    };
+
     /**
      * Static constructor used to create a shared_ptr of a DebugContext.
      */
@@ -211,6 +216,7 @@ public:
     std::vector<TimelineEntry> GetTimeline(u32 start, u32 count, TimelineKind kind,
                                            bool filter_kind, u32 required_changes = 0) const;
     u32 GetTimelineCount() const;
+    TimelinePosition GetTimelinePosition() const;
     void ClearTimeline();
 
     BreakPointState GetBreakpointState();

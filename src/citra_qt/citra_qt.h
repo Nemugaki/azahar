@@ -171,6 +171,8 @@ private:
     void ConnectWidgetEvents();
     void ConnectMenuEvents();
     void UpdateMenuState();
+    Core::DebugPauseReason PauseReason() const;
+    bool ResumeEmulation();
 
     void PreventOSSleep();
     void AllowOSSleep();

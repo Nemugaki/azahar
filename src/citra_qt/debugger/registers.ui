@@ -30,6 +30,11 @@
         <string>Value</string>
        </property>
       </column>
+      <column>
+       <property name="text">
+        <string>Previous</string>
+       </property>
+      </column>
      </widget>
     </item>
    </layout>
