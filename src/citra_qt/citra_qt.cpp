@@ -415,7 +415,7 @@ GMainWindow::GMainWindow(Core::System& system_)
 
     LoadTranslation();
 
-    if (Settings::values.pica_debugging || Settings::values.enable_rpc_server) {
+    if (Settings::values.pica_debugging) {
         Pica::g_debug_context = Pica::DebugContext::Construct();
     } else {
         Pica::g_debug_context.reset();

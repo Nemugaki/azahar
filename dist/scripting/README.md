@@ -7,6 +7,12 @@ loopback-only because the protocol can write emulated
 memory and has no authentication. Set `AZAHAR_RPC_PORT` before launching Azahar to override the
 default port, which is useful for isolated test instances; pass the same port to the client.
 
+The Debug settings page grants RPC access separately for memory/processes, emulation control, ARM
+registers, Graphics Debugger history, PICA snapshots, PICA breakpoints, PICA command lists, and the
+PICA vertex shader. Disabled features are omitted from the capability mask and their requests are
+rejected. PICA grants also require the base **Enable PICA200 debugging** setting; their saved
+checkboxes remain visible but disabled while that dependency is off.
+
 `citra.py` provides the Python client. In addition to memory and process access, it supports:
 
 ```python

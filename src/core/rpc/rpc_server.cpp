@@ -3,6 +3,7 @@
 // Refer to the license.txt file included.
 
 #include "common/logging/log.h"
+#include "common/settings.h"
 #include "core/arm/arm_interface.h"
 #include "core/core.h"
 #include "core/hle/kernel/process.h"
@@ -142,14 +143,74 @@ void RPCServer::HandleSetGetProcess(Packet& packet, u32 operation, u32 process_i
 }
 
 void RPCServer::HandleCapabilities(Packet& packet) {
-    const std::array response{CURRENT_VERSION,
-                              CAPABILITY_EMULATION_CONTROL | CAPABILITY_PICA_SNAPSHOT |
-                                  CAPABILITY_PICA_BREAKPOINT | CAPABILITY_PICA_TRACE |
-                                  CAPABILITY_CPU_REGISTERS | CAPABILITY_GX_COMMAND_TRACE |
-                                  CAPABILITY_PICA_SHADER};
+    const std::array response{CURRENT_VERSION, GetEnabledCapabilities()};
     std::memcpy(packet.GetPacketData().data(), response.data(), sizeof(response));
     packet.SetPacketDataSize(sizeof(response));
     packet.SendReply();
+}
+
+u32 RPCServer::GetEnabledCapabilities() const {
+    if (!Settings::values.enable_rpc_server.GetValue()) {
+        return 0;
+    }
+
+    u32 capabilities = 0;
+    if (Settings::values.rpc_allow_memory.GetValue()) {
+        capabilities |= CAPABILITY_MEMORY_ACCESS;
+    }
+    if (Settings::values.rpc_allow_emulation_control.GetValue()) {
+        capabilities |= CAPABILITY_EMULATION_CONTROL;
+    }
+    if (Settings::values.rpc_allow_cpu_registers.GetValue()) {
+        capabilities |= CAPABILITY_CPU_REGISTERS;
+    }
+    if (Settings::values.rpc_allow_graphics_debugger.GetValue()) {
+        capabilities |= CAPABILITY_GX_COMMAND_TRACE;
+    }
+    if (Settings::values.pica_debugging.GetValue()) {
+        if (Settings::values.rpc_allow_pica_snapshot.GetValue()) {
+            capabilities |= CAPABILITY_PICA_SNAPSHOT;
+        }
+        if (Settings::values.rpc_allow_pica_breakpoints.GetValue()) {
+            capabilities |= CAPABILITY_PICA_BREAKPOINT;
+        }
+        if (Settings::values.rpc_allow_pica_command_list.GetValue()) {
+            capabilities |= CAPABILITY_PICA_TRACE;
+        }
+        if (Settings::values.rpc_allow_pica_vertex_shader.GetValue()) {
+            capabilities |= CAPABILITY_PICA_SHADER;
+        }
+    }
+    return capabilities;
+}
+
+bool RPCServer::IsPacketTypeEnabled(PacketType packet_type) const {
+    const u32 capabilities = GetEnabledCapabilities();
+    switch (packet_type) {
+    case PacketType::Capabilities:
+        return true;
+    case PacketType::ReadMemory:
+    case PacketType::WriteMemory:
+    case PacketType::ProcessList:
+    case PacketType::SetGetProcess:
+        return capabilities & CAPABILITY_MEMORY_ACCESS;
+    case PacketType::EmulationControl:
+        return capabilities & CAPABILITY_EMULATION_CONTROL;
+    case PacketType::CPURegisters:
+        return capabilities & CAPABILITY_CPU_REGISTERS;
+    case PacketType::GXCommandTrace:
+        return capabilities & CAPABILITY_GX_COMMAND_TRACE;
+    case PacketType::PicaSnapshot:
+        return capabilities & CAPABILITY_PICA_SNAPSHOT;
+    case PacketType::PicaBreakpoint:
+        return capabilities & CAPABILITY_PICA_BREAKPOINT;
+    case PacketType::PicaTrace:
+        return capabilities & CAPABILITY_PICA_TRACE;
+    case PacketType::PicaShader:
+        return capabilities & CAPABILITY_PICA_SHADER;
+    default:
+        return false;
+    }
 }
 
 void RPCServer::HandlePicaBreakpoint(Packet& packet, PicaBreakpointOperation operation, u32 event,
@@ -516,7 +577,8 @@ void RPCServer::HandleSingleRequest(std::unique_ptr<Packet> request_packet) {
     bool success = false;
     const auto packet_data = request_packet->GetPacketData();
 
-    if (ValidatePacket(request_packet->GetHeader())) {
+    if (IsPacketTypeEnabled(request_packet->GetPacketType()) &&
+        ValidatePacket(request_packet->GetHeader())) {
         // Legacy request types use two arguments.
         u32 arg1 = 0;
         u32 arg2 = 0;

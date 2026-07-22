@@ -24,6 +24,8 @@ public:
     void SetupPerGameUI();
 
 private:
+    void UpdateRPCControls();
+
     std::unique_ptr<Ui::ConfigureDebug> ui;
     bool is_powered_on;
 };

@@ -659,6 +659,14 @@ struct Values {
     Setting<bool> instant_debug_log{false, Keys::instant_debug_log};
     Setting<bool> enable_rpc_server{true, Keys::enable_rpc_server};
     Setting<u16> rpc_server_port{45987, Keys::rpc_server_port};
+    Setting<bool> rpc_allow_memory{true, Keys::rpc_allow_memory};
+    Setting<bool> rpc_allow_emulation_control{true, Keys::rpc_allow_emulation_control};
+    Setting<bool> rpc_allow_cpu_registers{true, Keys::rpc_allow_cpu_registers};
+    Setting<bool> rpc_allow_graphics_debugger{true, Keys::rpc_allow_graphics_debugger};
+    Setting<bool> rpc_allow_pica_snapshot{true, Keys::rpc_allow_pica_snapshot};
+    Setting<bool> rpc_allow_pica_breakpoints{true, Keys::rpc_allow_pica_breakpoints};
+    Setting<bool> rpc_allow_pica_command_list{true, Keys::rpc_allow_pica_command_list};
+    Setting<bool> rpc_allow_pica_vertex_shader{true, Keys::rpc_allow_pica_vertex_shader};
     Setting<bool> toggle_unique_data_console_type{false, Keys::toggle_unique_data_console_type};
     Setting<bool> break_on_unmapped_memory_access{false, Keys::break_on_unmapped_memory_access};
 

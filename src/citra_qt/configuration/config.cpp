@@ -524,6 +524,14 @@ void QtConfig::ReadDebuggingValues() {
     ReadBasicSetting(Settings::values.instant_debug_log);
     ReadBasicSetting(Settings::values.enable_rpc_server);
     ReadBasicSetting(Settings::values.rpc_server_port);
+    ReadBasicSetting(Settings::values.rpc_allow_memory);
+    ReadBasicSetting(Settings::values.rpc_allow_emulation_control);
+    ReadBasicSetting(Settings::values.rpc_allow_cpu_registers);
+    ReadBasicSetting(Settings::values.rpc_allow_graphics_debugger);
+    ReadBasicSetting(Settings::values.rpc_allow_pica_snapshot);
+    ReadBasicSetting(Settings::values.rpc_allow_pica_breakpoints);
+    ReadBasicSetting(Settings::values.rpc_allow_pica_command_list);
+    ReadBasicSetting(Settings::values.rpc_allow_pica_vertex_shader);
     ReadBasicSetting(Settings::values.toggle_unique_data_console_type);
     ReadBasicSetting(Settings::values.break_on_unmapped_memory_access);
 
@@ -1116,6 +1124,14 @@ void QtConfig::SaveDebuggingValues() {
     WriteBasicSetting(Settings::values.instant_debug_log);
     WriteBasicSetting(Settings::values.enable_rpc_server);
     WriteBasicSetting(Settings::values.rpc_server_port);
+    WriteBasicSetting(Settings::values.rpc_allow_memory);
+    WriteBasicSetting(Settings::values.rpc_allow_emulation_control);
+    WriteBasicSetting(Settings::values.rpc_allow_cpu_registers);
+    WriteBasicSetting(Settings::values.rpc_allow_graphics_debugger);
+    WriteBasicSetting(Settings::values.rpc_allow_pica_snapshot);
+    WriteBasicSetting(Settings::values.rpc_allow_pica_breakpoints);
+    WriteBasicSetting(Settings::values.rpc_allow_pica_command_list);
+    WriteBasicSetting(Settings::values.rpc_allow_pica_vertex_shader);
     WriteBasicSetting(Settings::values.toggle_unique_data_console_type);
     WriteBasicSetting(Settings::values.break_on_unmapped_memory_access);
 

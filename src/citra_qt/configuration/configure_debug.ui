@@ -73,6 +73,119 @@
     </layout>
    </item>
    <item>
+    <widget class="QGroupBox" name="rpc_groupbox">
+     <property name="title">
+      <string>Agent RPC</string>
+     </property>
+     <layout class="QGridLayout" name="rpc_layout">
+      <item row="0" column="0">
+       <widget class="QCheckBox" name="enable_rpc_server">
+        <property name="text">
+         <string>Enable agent RPC server</string>
+        </property>
+        <property name="toolTip">
+         <string>Enables the loopback-only RPC server on 127.0.0.1.</string>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1">
+       <widget class="QSpinBox" name="rpc_server_port">
+        <property name="toolTip">
+         <string>Loopback UDP port. AZAHAR_RPC_PORT overrides this setting for the current process.</string>
+        </property>
+        <property name="prefix">
+         <string>Port: </string>
+        </property>
+        <property name="minimum">
+         <number>1</number>
+        </property>
+        <property name="maximum">
+         <number>65535</number>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="0" colspan="2">
+       <widget class="QCheckBox" name="rpc_allow_memory">
+        <property name="text">
+         <string>Allow memory and process access</string>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="0" colspan="2">
+       <widget class="QCheckBox" name="rpc_allow_emulation_control">
+        <property name="text">
+         <string>Allow run, stop, restart, and pause</string>
+        </property>
+       </widget>
+      </item>
+      <item row="3" column="0" colspan="2">
+       <widget class="QCheckBox" name="rpc_allow_cpu_registers">
+        <property name="text">
+         <string>Allow ARM register access</string>
+        </property>
+       </widget>
+      </item>
+      <item row="4" column="0" colspan="2">
+       <widget class="QCheckBox" name="rpc_allow_graphics_debugger">
+        <property name="text">
+         <string>Allow Graphics Debugger access</string>
+        </property>
+       </widget>
+      </item>
+      <item row="5" column="0" colspan="2">
+       <widget class="QCheckBox" name="rpc_allow_pica_snapshot">
+        <property name="text">
+         <string>Allow PICA200 state snapshots</string>
+        </property>
+        <property name="toolTip">
+         <string>Requires Enable PICA200 debugging in the CPU section.</string>
+        </property>
+       </widget>
+      </item>
+      <item row="6" column="0" colspan="2">
+       <widget class="QCheckBox" name="rpc_allow_pica_breakpoints">
+        <property name="text">
+         <string>Allow PICA200 breakpoints</string>
+        </property>
+        <property name="toolTip">
+         <string>Requires Enable PICA200 debugging in the CPU section.</string>
+        </property>
+       </widget>
+      </item>
+      <item row="7" column="0" colspan="2">
+       <widget class="QCheckBox" name="rpc_allow_pica_command_list">
+        <property name="text">
+         <string>Allow PICA command-list tracing</string>
+        </property>
+        <property name="toolTip">
+         <string>Requires Enable PICA200 debugging in the CPU section.</string>
+        </property>
+       </widget>
+      </item>
+      <item row="8" column="0" colspan="2">
+       <widget class="QCheckBox" name="rpc_allow_pica_vertex_shader">
+        <property name="text">
+         <string>Allow PICA vertex-shader access</string>
+        </property>
+        <property name="toolTip">
+         <string>Requires Enable PICA200 debugging in the CPU section.</string>
+        </property>
+       </widget>
+      </item>
+      <item row="9" column="0" colspan="2">
+       <widget class="QLabel" name="rpc_server_info">
+        <property name="text">
+         <string>Available before and between games. Server and port changes require restarting Azahar.</string>
+        </property>
+        <property name="wordWrap">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
     <widget class="QGroupBox" name="groupBox_2">
      <property name="title">
       <string>Logging</string>
@@ -300,42 +413,6 @@
         </property>
         <property name="toolTip">
          <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Forces all async operations to run on the main thread, making them deterministic. Do not enable if you don't know what you are doing.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
-        </property>
-       </widget>
-      </item>
-      <item row="4" column="0">
-        <widget class="QCheckBox" name="enable_rpc_server">
-          <property name="text">
-            <string>Enable agent RPC server</string>
-          </property>
-          <property name="toolTip">
-            <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Enables the loopback-only RPC server on 127.0.0.1 using the configured port.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
-          </property>
-        </widget>
-      </item>
-      <item row="4" column="1">
-       <widget class="QSpinBox" name="rpc_server_port">
-        <property name="toolTip">
-         <string>Loopback UDP port. AZAHAR_RPC_PORT overrides this setting for the current process.</string>
-        </property>
-        <property name="prefix">
-         <string>Port: </string>
-        </property>
-        <property name="minimum">
-         <number>1</number>
-        </property>
-        <property name="maximum">
-         <number>65535</number>
-        </property>
-       </widget>
-      </item>
-      <item row="5" column="0">
-       <widget class="QLabel" name="rpc_server_info">
-        <property name="text">
-         <string>Available before and between games. Port changes take effect after restarting Azahar.</string>
-        </property>
-        <property name="wordWrap">
-         <bool>true</bool>
         </property>
        </widget>
       </item>

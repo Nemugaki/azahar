@@ -160,6 +160,7 @@ constexpr u32 CAPABILITY_PICA_TRACE = 1U << 3;
 constexpr u32 CAPABILITY_CPU_REGISTERS = 1U << 4;
 constexpr u32 CAPABILITY_GX_COMMAND_TRACE = 1U << 5;
 constexpr u32 CAPABILITY_PICA_SHADER = 1U << 6;
+constexpr u32 CAPABILITY_MEMORY_ACCESS = 1U << 7;
 
 class Packet {
 public:

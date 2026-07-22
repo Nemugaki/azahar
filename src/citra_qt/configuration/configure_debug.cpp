@@ -85,6 +85,7 @@ ConfigureDebug::ConfigureDebug(bool is_powered_on_, QWidget* parent)
     connect(ui->toggle_pica_debugging, &QCheckBox::clicked, this, [this](bool checked) {
         QMessageBox::information(this, tr("Relaunch Required"),
                                  tr("Please relaunch Azahar for this setting to take effect."));
+        UpdateRPCControls();
     });
 
     ui->toggle_cpu_jit->setEnabled(!is_powered_on);
@@ -92,8 +93,9 @@ ConfigureDebug::ConfigureDebug(bool is_powered_on_, QWidget* parent)
     ui->toggle_pica_debugging->setEnabled(!is_powered_on);
     ui->toggle_dump_command_buffers->setEnabled(!is_powered_on);
     ui->enable_rpc_server->setEnabled(!is_powered_on);
-    ui->rpc_server_port->setEnabled(!is_powered_on && ui->enable_rpc_server->isChecked());
-    connect(ui->enable_rpc_server, &QCheckBox::clicked, ui->rpc_server_port, &QSpinBox::setEnabled);
+    connect(ui->enable_rpc_server, &QCheckBox::clicked, this,
+            [this] { UpdateRPCControls(); });
+    UpdateRPCControls();
     ui->toggle_unique_data_console_type->setEnabled(!is_powered_on);
 
     // Set a minimum width for the label to prevent the slider from changing size.
@@ -135,10 +137,21 @@ void ConfigureDebug::SetConfiguration() {
         Settings::values.deterministic_async_operations.GetValue());
     ui->enable_rpc_server->setChecked(Settings::values.enable_rpc_server.GetValue());
     ui->rpc_server_port->setValue(Settings::values.rpc_server_port.GetValue());
+    ui->rpc_allow_memory->setChecked(Settings::values.rpc_allow_memory.GetValue());
+    ui->rpc_allow_emulation_control->setChecked(
+        Settings::values.rpc_allow_emulation_control.GetValue());
+    ui->rpc_allow_cpu_registers->setChecked(Settings::values.rpc_allow_cpu_registers.GetValue());
+    ui->rpc_allow_graphics_debugger->setChecked(
+        Settings::values.rpc_allow_graphics_debugger.GetValue());
+    ui->rpc_allow_pica_snapshot->setChecked(Settings::values.rpc_allow_pica_snapshot.GetValue());
+    ui->rpc_allow_pica_breakpoints->setChecked(
+        Settings::values.rpc_allow_pica_breakpoints.GetValue());
+    ui->rpc_allow_pica_command_list->setChecked(
+        Settings::values.rpc_allow_pica_command_list.GetValue());
+    ui->rpc_allow_pica_vertex_shader->setChecked(
+        Settings::values.rpc_allow_pica_vertex_shader.GetValue());
 #ifndef ENABLE_SCRIPTING
-    ui->enable_rpc_server->setVisible(false);
-    ui->rpc_server_port->setVisible(false);
-    ui->rpc_server_info->setVisible(false);
+    ui->rpc_groupbox->setVisible(false);
 #endif // !ENABLE_SCRIPTING
     ui->toggle_unique_data_console_type->setChecked(
         Settings::values.toggle_unique_data_console_type.GetValue());
@@ -189,6 +202,14 @@ void ConfigureDebug::ApplyConfiguration() {
         ui->deterministic_async_operations->isChecked();
     Settings::values.enable_rpc_server = ui->enable_rpc_server->isChecked();
     Settings::values.rpc_server_port = static_cast<u16>(ui->rpc_server_port->value());
+    Settings::values.rpc_allow_memory = ui->rpc_allow_memory->isChecked();
+    Settings::values.rpc_allow_emulation_control = ui->rpc_allow_emulation_control->isChecked();
+    Settings::values.rpc_allow_cpu_registers = ui->rpc_allow_cpu_registers->isChecked();
+    Settings::values.rpc_allow_graphics_debugger = ui->rpc_allow_graphics_debugger->isChecked();
+    Settings::values.rpc_allow_pica_snapshot = ui->rpc_allow_pica_snapshot->isChecked();
+    Settings::values.rpc_allow_pica_breakpoints = ui->rpc_allow_pica_breakpoints->isChecked();
+    Settings::values.rpc_allow_pica_command_list = ui->rpc_allow_pica_command_list->isChecked();
+    Settings::values.rpc_allow_pica_vertex_shader = ui->rpc_allow_pica_vertex_shader->isChecked();
     Settings::values.toggle_unique_data_console_type =
         ui->toggle_unique_data_console_type->isChecked();
     Settings::values.break_on_unmapped_memory_access =
@@ -217,12 +238,24 @@ void ConfigureDebug::SetupPerGameUI() {
 
     ui->gdb_groupbox->setVisible(false);
     ui->groupBox_2->setVisible(false);
-    ui->enable_rpc_server->setVisible(false);
-    ui->rpc_server_port->setVisible(false);
-    ui->rpc_server_info->setVisible(false);
+    ui->rpc_groupbox->setVisible(false);
     ui->toggle_unique_data_console_type->setVisible(false);
     ui->break_on_unmapped_memory_access->setVisible(false);
     ui->toggle_cpu_jit->setVisible(false);
+}
+
+void ConfigureDebug::UpdateRPCControls() {
+    const bool enabled = ui->enable_rpc_server->isChecked();
+    ui->rpc_server_port->setEnabled(!is_powered_on && enabled);
+    ui->rpc_allow_memory->setEnabled(enabled);
+    ui->rpc_allow_emulation_control->setEnabled(enabled);
+    ui->rpc_allow_cpu_registers->setEnabled(enabled);
+    ui->rpc_allow_graphics_debugger->setEnabled(enabled);
+    const bool pica_enabled = enabled && ui->toggle_pica_debugging->isChecked();
+    ui->rpc_allow_pica_snapshot->setEnabled(pica_enabled);
+    ui->rpc_allow_pica_breakpoints->setEnabled(pica_enabled);
+    ui->rpc_allow_pica_command_list->setEnabled(pica_enabled);
+    ui->rpc_allow_pica_vertex_shader->setEnabled(pica_enabled);
 }
 
 void ConfigureDebug::RetranslateUI() {
