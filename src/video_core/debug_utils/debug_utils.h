@@ -110,6 +110,9 @@ public:
      */
     struct BreakPoint {
         std::atomic_bool enabled = false;
+        std::atomic_bool one_shot = false;
+        std::atomic<u32> skip_remaining{};
+        std::atomic<u32> hit_count{};
     };
 
     struct BreakPointState {
@@ -131,6 +134,12 @@ public:
         ConditionField field{};
         u32 value{};
         u32 mask{UINT32_MAX};
+    };
+
+    struct BreakPointOptions {
+        bool one_shot{};
+        u32 skip_remaining{};
+        u32 hit_count{};
     };
 
     struct RenderTargetInfo {
@@ -194,9 +203,20 @@ public:
      */
     void OnEvent(Event event, const void* data) {
         // This check is left in the header to allow the compiler to inline it.
-        if (ignore_breakpoints_until_frame || !breakpoints[(int)event].enabled ||
+        auto& breakpoint = breakpoints[static_cast<int>(event)];
+        if (ignore_breakpoints_until_frame || !breakpoint.enabled ||
             !MatchesCondition(event, data))
             return;
+        ++breakpoint.hit_count;
+        u32 remaining = breakpoint.skip_remaining.load();
+        while (remaining) {
+            if (breakpoint.skip_remaining.compare_exchange_weak(remaining, remaining - 1)) {
+                return;
+            }
+        }
+        if (breakpoint.one_shot) {
+            breakpoint.enabled = false;
+        }
         // For the rest of event handling, call a separate function.
         DoOnEvent(event, data);
     }
@@ -229,6 +249,8 @@ public:
 
     void SetBreakpointCondition(Event event, BreakPointCondition condition);
     BreakPointCondition GetBreakpointCondition(Event event);
+    void SetBreakpointOptions(Event event, bool one_shot, u32 skip_count);
+    BreakPointOptions GetBreakpointOptions(Event event) const;
     void SetRenderTargetInfo(RenderTargetInfo info);
     RenderTargetInfo GetRenderTargetInfo() const;
     std::vector<TimelineEntry> GetTimeline(u32 start, u32 count, TimelineKind kind,

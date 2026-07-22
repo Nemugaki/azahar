@@ -2,6 +2,7 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
+#include <array>
 #include <QApplication>
 #include <QClipboard>
 #include <QComboBox>
@@ -61,7 +62,7 @@ int GPUCommandListModel::rowCount([[maybe_unused]] const QModelIndex& parent) co
 }
 
 int GPUCommandListModel::columnCount([[maybe_unused]] const QModelIndex& parent) const {
-    return 4;
+    return 5;
 }
 
 QVariant GPUCommandListModel::data(const QModelIndex& index, int role) const {
@@ -80,6 +81,12 @@ QVariant GPUCommandListModel::data(const QModelIndex& index, int role) const {
             return QStringLiteral("%1").arg(write.mask, 4, 2, QLatin1Char('0'));
         case 3:
             return QStringLiteral("%1").arg(write.value, 8, 16, QLatin1Char('0'));
+        case 4:
+            return previous_values[index.row()]
+                       ? QStringLiteral("0x%1 → 0x%2")
+                             .arg(*previous_values[index.row()], 8, 16, QLatin1Char('0'))
+                             .arg(write.value, 8, 16, QLatin1Char('0'))
+                       : tr("initial");
         }
     } else if (role == CommandIdRole) {
         return QVariant::fromValue<int>(write.cmd_id);
@@ -101,6 +108,8 @@ QVariant GPUCommandListModel::headerData(int section, [[maybe_unused]] Qt::Orien
             return tr("Mask");
         case 3:
             return tr("New Value");
+        case 4:
+            return tr("Previous → New");
         }
 
         break;
@@ -114,6 +123,16 @@ void GPUCommandListModel::OnPicaTraceFinished(const Pica::DebugUtils::PicaTrace&
     beginResetModel();
 
     pica_trace = trace;
+    previous_values.clear();
+    previous_values.reserve(pica_trace.writes.size());
+    std::array<std::optional<u32>, Pica::PicaCore::Regs::NUM_REGS> latest{};
+    for (const auto& write : pica_trace.writes) {
+        previous_values.push_back(write.cmd_id < latest.size() ? latest[write.cmd_id]
+                                                                : std::optional<u32>{});
+        if (write.cmd_id < latest.size()) {
+            latest[write.cmd_id] = write.value;
+        }
+    }
 
     endResetModel();
 }
@@ -168,7 +187,9 @@ void GPUCommandListWidget::SetCommandInfo(const QModelIndex& index) {
 
         const auto info = Pica::Texture::TextureInfo::FromPicaRegister(config, format);
         const u8* src = system.Memory().GetPhysicalPointer(config.GetPhysicalAddress());
-        new_info_widget = new TextureInfoWidget(src, info);
+        if (src) {
+            new_info_widget = new TextureInfoWidget(src, info);
+        }
     }
     if (command_info_widget) {
         delete command_info_widget;
@@ -231,7 +252,8 @@ void GPUCommandListWidget::OnToggleTracing() {
     } else {
         pica_trace = Pica::DebugUtils::FinishPicaTracing();
         emit TracingFinished(*pica_trace);
-        toggle_tracing->setText(tr("Start Tracing"));
+        toggle_tracing->setText(pica_trace->truncated ? tr("Start Tracing (last was truncated)")
+                                                       : tr("Start Tracing"));
     }
 }
 

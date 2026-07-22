@@ -107,6 +107,7 @@ private:
     QSpinBox* surface_width_control;
     QSpinBox* surface_height_control;
     QComboBox* surface_format_control;
+    QComboBox* channel_view;
 
     SurfacePicture* surface_picture_label;
     QSpinBox* surface_picker_x_control;

@@ -12,7 +12,9 @@ class QLabel;
 class QPushButton;
 class QTreeView;
 class QComboBox;
+class QCheckBox;
 class QLineEdit;
+class QSpinBox;
 
 class BreakPointModel;
 
@@ -61,5 +63,8 @@ private:
     QLineEdit* condition_mask;
     QPushButton* condition_current;
     QLabel* condition_error;
+    QCheckBox* one_shot;
+    QSpinBox* skip_count;
+    QLabel* hit_count;
     Core::System& system;
 };

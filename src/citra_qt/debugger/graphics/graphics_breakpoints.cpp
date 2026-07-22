@@ -3,13 +3,16 @@
 // Refer to the license.txt file included.
 
 #include <algorithm>
+#include <QApplication>
 #include <QComboBox>
+#include <QCheckBox>
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMetaType>
 #include <QPushButton>
+#include <QSpinBox>
 #include <QTreeView>
 #include <QVBoxLayout>
 #include "citra_qt/debugger/graphics/graphics_breakpoints.h"
@@ -79,7 +82,14 @@ QVariant BreakPointModel::data(const QModelIndex& index, int role) const {
 
     case Qt::BackgroundRole: {
         if (at_breakpoint && index.row() == static_cast<int>(active_breakpoint)) {
-            return QBrush(QColor(0xE0, 0xE0, 0x10));
+            return QApplication::palette().brush(QPalette::Highlight);
+        }
+        break;
+    }
+
+    case Qt::ForegroundRole: {
+        if (at_breakpoint && index.row() == static_cast<int>(active_breakpoint)) {
+            return QApplication::palette().brush(QPalette::HighlightedText);
         }
         break;
     }
@@ -202,6 +212,20 @@ GraphicsBreakPointsWidget::GraphicsBreakPointsWidget(
     breakpoint_list->setRootIsDecorated(false);
     breakpoint_list->setHeaderHidden(false);
     breakpoint_list->setModel(breakpoint_model);
+    auto* enable_all = new QPushButton(tr("Enable All"));
+    auto* disable_all = new QPushButton(tr("Disable All"));
+    connect(enable_all, &QPushButton::clicked, this, [this] {
+        for (int row = 0; row < breakpoint_model->rowCount(); ++row) {
+            breakpoint_model->setData(breakpoint_model->index(row, 0), Qt::Checked,
+                                      Qt::CheckStateRole);
+        }
+    });
+    connect(disable_all, &QPushButton::clicked, this, [this] {
+        for (int row = 0; row < breakpoint_model->rowCount(); ++row) {
+            breakpoint_model->setData(breakpoint_model->index(row, 0), Qt::Unchecked,
+                                      Qt::CheckStateRole);
+        }
+    });
 
     condition_field = new QComboBox;
     condition_field->setAccessibleName(tr("Breakpoint condition field"));
@@ -227,6 +251,13 @@ GraphicsBreakPointsWidget::GraphicsBreakPointsWidget(
     condition_current = new QPushButton(tr("Use Current"));
     condition_error = new QLabel;
     condition_error->setAccessibleName(tr("Breakpoint condition status"));
+    one_shot = new QCheckBox(tr("Disable after the next hit"));
+    one_shot->setAccessibleName(tr("One-shot breakpoint"));
+    skip_count = new QSpinBox;
+    skip_count->setRange(0, 1000000000);
+    skip_count->setAccessibleName(tr("Breakpoint hits to skip"));
+    hit_count = new QLabel;
+    hit_count->setTextInteractionFlags(Qt::TextSelectableByMouse);
 
     qRegisterMetaType<Pica::DebugContext::Event>("Pica::DebugContext::Event");
 
@@ -284,11 +315,19 @@ GraphicsBreakPointsWidget::GraphicsBreakPointsWidget(
         main_layout->addLayout(sub_layout);
     }
     main_layout->addWidget(breakpoint_list);
+    auto* breakpoint_buttons = new QHBoxLayout;
+    breakpoint_buttons->addWidget(enable_all);
+    breakpoint_buttons->addWidget(disable_all);
+    breakpoint_buttons->addStretch();
+    main_layout->addLayout(breakpoint_buttons);
     auto* condition_group = new QGroupBox(tr("Selected breakpoint condition"));
     auto* condition_layout = new QFormLayout;
     condition_layout->addRow(tr("Field:"), condition_field);
     condition_layout->addRow(tr("Value:"), condition_value);
     condition_layout->addRow(tr("Mask:"), condition_mask);
+    condition_layout->addRow(tr("One shot:"), one_shot);
+    condition_layout->addRow(tr("Skip hits:"), skip_count);
+    condition_layout->addRow(tr("Observed hits:"), hit_count);
     auto* condition_buttons = new QHBoxLayout;
     condition_buttons->addWidget(condition_current);
     auto* apply_condition = new QPushButton(tr("Apply"));
@@ -317,6 +356,10 @@ void GraphicsBreakPointsWidget::LoadCondition(const QModelIndex& index) {
         QStringLiteral("0x%1").arg(condition.value, 8, 16, QLatin1Char('0')));
     condition_mask->setText(
         QStringLiteral("0x%1").arg(condition.mask, 8, 16, QLatin1Char('0')));
+    const auto options = context->GetBreakpointOptions(static_cast<Event>(index.row()));
+    one_shot->setChecked(options.one_shot);
+    skip_count->setValue(static_cast<int>(options.skip_remaining));
+    hit_count->setText(QString::number(options.hit_count));
     condition_error->clear();
 }
 
@@ -341,6 +384,8 @@ void GraphicsBreakPointsWidget::ApplyCondition() {
         }
     }
     context->SetBreakpointCondition(static_cast<Event>(index.row()), condition);
+    context->SetBreakpointOptions(static_cast<Event>(index.row()), one_shot->isChecked(),
+                                  static_cast<u32>(skip_count->value()));
     condition_error->setText(tr("Condition applied"));
     emit BreakPointsChanged(breakpoint_model->index(index.row(), 1),
                             breakpoint_model->index(index.row(), 1));

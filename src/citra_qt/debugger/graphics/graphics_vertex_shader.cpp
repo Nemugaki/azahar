@@ -380,8 +380,6 @@ GraphicsVertexShaderWidget::GraphicsVertexShaderWidget(
     breakpoint_warning =
         new QLabel(tr("(data only available at vertex shader invocation breakpoints)"));
 
-    // TODO: Add some button for jumping to the shader entry point
-
     model = new GraphicsVertexShaderModel(this);
     binary_list = new QTreeView;
     binary_list->setModel(model);
@@ -390,12 +388,19 @@ GraphicsVertexShaderWidget::GraphicsVertexShaderWidget(
 
     auto dump_shader =
         new QPushButton(QIcon::fromTheme(QStringLiteral("document-save")), tr("Dump"));
+    auto* jump_to_entry = new QPushButton(tr("Jump to Entry Point"));
+    jump_to_entry->setAccessibleName(tr("Jump to vertex shader entry point"));
 
     instruction_description = new QLabel;
 
     cycle_index = new QSpinBox;
 
     connect(dump_shader, &QPushButton::clicked, this, &GraphicsVertexShaderWidget::DumpShader);
+    connect(jump_to_entry, &QPushButton::clicked, this, [this] {
+        const auto index = model->index(static_cast<int>(shader_entry_point), 0);
+        binary_list->setCurrentIndex(index);
+        binary_list->scrollTo(index, QAbstractItemView::PositionAtCenter);
+    });
 
     connect(cycle_index, static_cast<void (QSpinBox::*)(int)>(&QSpinBox::valueChanged), this,
             &GraphicsVertexShaderWidget::OnCycleIndexChanged);
@@ -449,7 +454,11 @@ GraphicsVertexShaderWidget::GraphicsVertexShaderWidget(
     binary_list->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::MinimumExpanding);
     main_layout->addWidget(binary_list);
 
-    main_layout->addWidget(dump_shader);
+    auto* shader_buttons = new QHBoxLayout;
+    shader_buttons->addWidget(jump_to_entry);
+    shader_buttons->addWidget(dump_shader);
+    shader_buttons->addStretch();
+    main_layout->addLayout(shader_buttons);
     {
         auto sub_layout = new QFormLayout;
         sub_layout->addRow(tr("Cycle Index:"), cycle_index);
@@ -519,7 +528,8 @@ void GraphicsVertexShaderWidget::Reload(bool replace_vertex_data, const void* ve
         info.swizzle_info.push_back(swizzle_info);
     }
 
-    info.labels.insert({snapshot.entry_point, "main"});
+    shader_entry_point = snapshot.entry_point;
+    info.labels.insert({shader_entry_point, "main"});
     debug_data = std::move(snapshot.cycles);
 
     // Reload widget state

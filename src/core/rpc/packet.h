@@ -69,6 +69,8 @@ enum class PicaBreakpointOperation : u32 {
     Clear = 3,
     SetCondition = 4,
     GetCondition = 5,
+    SetOptions = 6,
+    GetOptions = 7,
 };
 
 enum class PicaTraceOperation : u32 {
@@ -180,6 +182,12 @@ struct PicaBreakpointConditionReply {
     u32 field;
     u32 value;
     u32 mask;
+};
+
+struct PicaBreakpointOptionsReply {
+    u32 one_shot;
+    u32 skip_remaining;
+    u32 hit_count;
 };
 
 struct PicaRenderTargetReply {

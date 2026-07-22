@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <optional>
 #include <QAbstractListModel>
 #include <QDockWidget>
 #include "video_core/debug_utils/debug_utils.h"
@@ -36,6 +37,7 @@ public slots:
 
 private:
     Pica::DebugUtils::PicaTrace pica_trace;
+    std::vector<std::optional<u32>> previous_values;
 };
 
 class GPUCommandListWidget : public QDockWidget {

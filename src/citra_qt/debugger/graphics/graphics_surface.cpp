@@ -110,6 +110,10 @@ GraphicsSurfaceWidget::GraphicsSurfaceWidget(Core::System& system_,
 
     surface_format_control = new QComboBox;
     surface_format_control->addItems(surface_formats);
+    channel_view = new QComboBox;
+    channel_view->addItems({tr("RGBA"), tr("RGB"), tr("Red"), tr("Green"), tr("Blue"),
+                            tr("Alpha"), tr("RGBA over checkerboard")});
+    channel_view->setAccessibleName(tr("Surface channel view"));
 
     surface_info_label = new QLabel();
     surface_info_label->setWordWrap(true);
@@ -138,6 +142,8 @@ GraphicsSurfaceWidget::GraphicsSurfaceWidget(Core::System& system_,
             &GraphicsSurfaceWidget::OnSurfaceHeightChanged);
     connect(surface_format_control, qOverload<int>(&QComboBox::currentIndexChanged), this,
             &GraphicsSurfaceWidget::OnSurfaceFormatChanged);
+    connect(channel_view, qOverload<int>(&QComboBox::currentIndexChanged), this,
+            [this] { emit Update(); });
     connect(surface_picker_x_control, qOverload<int>(&QSpinBox::valueChanged), this,
             &GraphicsSurfaceWidget::OnSurfacePickerXChanged);
     connect(surface_picker_y_control, qOverload<int>(&QSpinBox::valueChanged), this,
@@ -148,32 +154,50 @@ GraphicsSurfaceWidget::GraphicsSurfaceWidget(Core::System& system_,
     auto main_layout = new QVBoxLayout;
     {
         auto sub_layout = new QHBoxLayout;
-        sub_layout->addWidget(new QLabel(tr("Source:")));
+        auto* label = new QLabel(tr("Source:"));
+        label->setBuddy(surface_source_list);
+        sub_layout->addWidget(label);
         sub_layout->addWidget(surface_source_list);
         main_layout->addLayout(sub_layout);
     }
     {
         auto sub_layout = new QHBoxLayout;
-        sub_layout->addWidget(new QLabel(tr("Physical Address:")));
+        auto* label = new QLabel(tr("Physical Address:"));
+        label->setBuddy(surface_address_control);
+        sub_layout->addWidget(label);
         sub_layout->addWidget(surface_address_control);
         main_layout->addLayout(sub_layout);
     }
     {
         auto sub_layout = new QHBoxLayout;
-        sub_layout->addWidget(new QLabel(tr("Width:")));
+        auto* label = new QLabel(tr("Width:"));
+        label->setBuddy(surface_width_control);
+        sub_layout->addWidget(label);
         sub_layout->addWidget(surface_width_control);
         main_layout->addLayout(sub_layout);
     }
     {
         auto sub_layout = new QHBoxLayout;
-        sub_layout->addWidget(new QLabel(tr("Height:")));
+        auto* label = new QLabel(tr("Height:"));
+        label->setBuddy(surface_height_control);
+        sub_layout->addWidget(label);
         sub_layout->addWidget(surface_height_control);
         main_layout->addLayout(sub_layout);
     }
     {
         auto sub_layout = new QHBoxLayout;
-        sub_layout->addWidget(new QLabel(tr("Format:")));
+        auto* label = new QLabel(tr("Format:"));
+        label->setBuddy(surface_format_control);
+        sub_layout->addWidget(label);
         sub_layout->addWidget(surface_format_control);
+        main_layout->addLayout(sub_layout);
+    }
+    {
+        auto sub_layout = new QHBoxLayout;
+        auto* label = new QLabel(tr("Channels:"));
+        label->setBuddy(channel_view);
+        sub_layout->addWidget(label);
+        sub_layout->addWidget(channel_view);
         main_layout->addLayout(sub_layout);
     }
     main_layout->addWidget(scroll_area);
@@ -184,13 +208,17 @@ GraphicsSurfaceWidget::GraphicsSurfaceWidget(Core::System& system_,
         {
             {
                 auto sub_layout = new QHBoxLayout;
-                sub_layout->addWidget(new QLabel(tr("X:")));
+                auto* label = new QLabel(tr("X:"));
+                label->setBuddy(surface_picker_x_control);
+                sub_layout->addWidget(label);
                 sub_layout->addWidget(surface_picker_x_control);
                 xy_layout->addLayout(sub_layout);
             }
             {
                 auto sub_layout = new QHBoxLayout;
-                sub_layout->addWidget(new QLabel(tr("Y:")));
+                auto* label = new QLabel(tr("Y:"));
+                label->setBuddy(surface_picker_y_control);
+                sub_layout->addWidget(label);
                 sub_layout->addWidget(surface_picker_y_control);
                 xy_layout->addLayout(sub_layout);
             }
@@ -663,6 +691,32 @@ void GraphicsSurfaceWidget::OnUpdate() {
         }
     }
 
+    const int view = channel_view->currentIndex();
+    if (view != 0) {
+        for (int y = 0; y < decoded_image.height(); ++y) {
+            for (int x = 0; x < decoded_image.width(); ++x) {
+                const QColor source = decoded_image.pixelColor(x, y);
+                if (view == 1) {
+                    decoded_image.setPixelColor(x, y,
+                                                QColor(source.red(), source.green(), source.blue()));
+                } else if (view >= 2 && view <= 5) {
+                    const int value = view == 2   ? source.red()
+                                      : view == 3 ? source.green()
+                                      : view == 4 ? source.blue()
+                                                  : source.alpha();
+                    decoded_image.setPixelColor(x, y, QColor(value, value, value));
+                } else {
+                    const int background = ((x / 8) ^ (y / 8)) & 1 ? 192 : 96;
+                    const int alpha = source.alpha();
+                    decoded_image.setPixelColor(
+                        x, y,
+                        QColor((source.red() * alpha + background * (255 - alpha)) / 255,
+                               (source.green() * alpha + background * (255 - alpha)) / 255,
+                               (source.blue() * alpha + background * (255 - alpha)) / 255));
+                }
+            }
+        }
+    }
     pixmap = QPixmap::fromImage(decoded_image);
     surface_picture_label->setPixmap(pixmap);
     surface_picture_label->resize(pixmap.size());

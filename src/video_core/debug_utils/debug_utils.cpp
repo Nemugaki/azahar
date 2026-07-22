@@ -105,6 +105,18 @@ DebugContext::BreakPointCondition DebugContext::GetBreakpointCondition(Event eve
     return breakpoint_conditions[static_cast<int>(event)];
 }
 
+void DebugContext::SetBreakpointOptions(Event event, bool one_shot, u32 skip_count) {
+    auto& breakpoint = breakpoints[static_cast<int>(event)];
+    breakpoint.one_shot = one_shot;
+    breakpoint.skip_remaining = skip_count;
+    breakpoint.hit_count = 0;
+}
+
+DebugContext::BreakPointOptions DebugContext::GetBreakpointOptions(Event event) const {
+    const auto& breakpoint = breakpoints[static_cast<int>(event)];
+    return {breakpoint.one_shot, breakpoint.skip_remaining, breakpoint.hit_count};
+}
+
 bool DebugContext::MatchesCondition(Event event, const void* data) {
     const auto condition = GetBreakpointCondition(event);
     if (condition.field == ConditionField::None) {

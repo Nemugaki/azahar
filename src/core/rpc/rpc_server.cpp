@@ -311,6 +311,21 @@ void RPCServer::HandlePicaBreakpoint(Packet& packet, PicaBreakpointOperation ope
         packet.SetPacketDataSize(sizeof(reply));
         packet.SendReply();
         return;
+    } else if ((operation == PicaBreakpointOperation::SetOptions ||
+                operation == PicaBreakpointOperation::GetOptions) &&
+               event < static_cast<u32>(Pica::DebugContext::Event::NumEvents)) {
+        if (operation == PicaBreakpointOperation::SetOptions) {
+            context->SetBreakpointOptions(static_cast<Pica::DebugContext::Event>(event),
+                                          argument != 0, value);
+        }
+        const auto options =
+            context->GetBreakpointOptions(static_cast<Pica::DebugContext::Event>(event));
+        const PicaBreakpointOptionsReply reply{options.one_shot, options.skip_remaining,
+                                                options.hit_count};
+        std::memcpy(packet.GetPacketData().data(), &reply, sizeof(reply));
+        packet.SetPacketDataSize(sizeof(reply));
+        packet.SendReply();
+        return;
     }
     const auto state = context->GetBreakpointState();
     const PicaBreakpointReply reply{state.enabled_mask, static_cast<u32>(state.active),
