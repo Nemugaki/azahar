@@ -154,6 +154,8 @@ void ConfigureDebug::SetConfiguration() {
         Settings::values.rpc_allow_pica_command_list.GetValue());
     ui->rpc_allow_pica_vertex_shader->setChecked(
         Settings::values.rpc_allow_pica_vertex_shader.GetValue());
+    ui->rpc_allow_render_captures->setChecked(
+        Settings::values.rpc_allow_render_captures.GetValue());
     ui->debugger_cache_mb->setValue(Settings::values.debugger_cache_mb.GetValue());
     ui->rpc_server_info->setText(
         tr("Effective port for this process: %1. Available before and between games. Server and "
@@ -222,6 +224,7 @@ void ConfigureDebug::ApplyConfiguration() {
     Settings::values.rpc_allow_pica_breakpoints = ui->rpc_allow_pica_breakpoints->isChecked();
     Settings::values.rpc_allow_pica_command_list = ui->rpc_allow_pica_command_list->isChecked();
     Settings::values.rpc_allow_pica_vertex_shader = ui->rpc_allow_pica_vertex_shader->isChecked();
+    Settings::values.rpc_allow_render_captures = ui->rpc_allow_render_captures->isChecked();
     Settings::values.debugger_cache_mb = static_cast<u32>(ui->debugger_cache_mb->value());
     Settings::values.toggle_unique_data_console_type =
         ui->toggle_unique_data_console_type->isChecked();
@@ -272,6 +275,7 @@ void ConfigureDebug::UpdateRPCControls() {
     ui->rpc_allow_pica_breakpoints->setEnabled(pica_enabled);
     ui->rpc_allow_pica_command_list->setEnabled(pica_enabled);
     ui->rpc_allow_pica_vertex_shader->setEnabled(pica_enabled);
+    ui->rpc_allow_render_captures->setEnabled(pica_enabled);
 }
 
 void ConfigureDebug::RetranslateUI() {

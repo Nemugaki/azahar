@@ -8,6 +8,7 @@ add_executable(tests
     core/memory/memory.cpp
     core/memory/vm_manager.cpp
     core/tracer/recorder.cpp
+    debugger/render_session.cpp
     precompiled_headers.h
     audio_core/hle/hle.cpp
     audio_core/hle/source.cpp
@@ -29,7 +30,7 @@ if (BSD STREQUAL "NetBSD")
     disable_pax_mprotect(tests)
 endif()
 
-target_link_libraries(tests PRIVATE citra_common citra_core video_core audio_core)
+target_link_libraries(tests PRIVATE azahar_debugger citra_common citra_core video_core audio_core)
 target_link_libraries(tests PRIVATE ${PLATFORM_LIBRARIES} catch2 nihstro-headers Threads::Threads)
 
 if (ENABLE_LIBRETRO)
@@ -50,4 +51,16 @@ endif()
 if (MSVC)
     include(BundleTarget)
     bundle_target_in_place(tests)
+endif()
+
+if (ENABLE_QT)
+    add_executable(debugger_dock_workspace_test
+        debugger/dock_workspace.cpp
+        ../citra_qt/debugger/dock_workspace.cpp
+    )
+    target_link_libraries(debugger_dock_workspace_test PRIVATE Qt6::Widgets)
+    if (CMAKE_SYSTEM_NAME STREQUAL CMAKE_HOST_SYSTEM_NAME)
+        add_test(NAME debugger_dock_workspace COMMAND debugger_dock_workspace_test)
+        set_tests_properties(debugger_dock_workspace PROPERTIES ENVIRONMENT QT_QPA_PLATFORM=offscreen)
+    endif()
 endif()

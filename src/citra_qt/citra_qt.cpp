@@ -50,6 +50,7 @@
 #include "citra_qt/configuration/configure_dialog.h"
 #include "citra_qt/configuration/configure_per_game.h"
 #include "citra_qt/debugger/console.h"
+#include "citra_qt/debugger/dock_workspace.h"
 #include "citra_qt/debugger/graphics/graphics.h"
 #include "citra_qt/debugger/graphics/graphics_breakpoints.h"
 #include "citra_qt/debugger/graphics/graphics_cmdlists.h"
@@ -715,6 +716,9 @@ void GMainWindow::InitializeWidgets() {
 }
 
 void GMainWindow::InitializeDebugWidgets() {
+    setDockOptions(dockOptions() | QMainWindow::AllowNestedDocks | QMainWindow::AllowTabbedDocks |
+                   QMainWindow::GroupedDragging);
+
     if (Pica::g_debug_context) {
         connect(ui->action_Create_Pica_Surface_Viewer, &QAction::triggered, this,
                 &GMainWindow::OnCreateGraphicsSurfaceViewer);
@@ -723,6 +727,12 @@ void GMainWindow::InitializeDebugWidgets() {
     }
 
     QMenu* debug_menu = ui->menu_View_Debugging;
+    const auto add_debug_dock = [this, debug_menu](Qt::DockWidgetArea area, QDockWidget* dock) {
+        addDockWidget(area, dock);
+        Debugger::ConfigureDockWorkspace(dock);
+        dock->hide();
+        debug_menu->addAction(dock->toggleViewAction());
+    };
 
 #if MICROPROFILE_ENABLED
     microProfileDialog = new MicroProfileDialog(this);
@@ -731,9 +741,7 @@ void GMainWindow::InitializeDebugWidgets() {
 #endif
 
     registersWidget = new RegistersWidget(system, this);
-    addDockWidget(Qt::RightDockWidgetArea, registersWidget);
-    registersWidget->hide();
-    debug_menu->addAction(registersWidget->toggleViewAction());
+    add_debug_dock(Qt::RightDockWidgetArea, registersWidget);
     connect(this, &GMainWindow::EmulationStarting, registersWidget,
             &RegistersWidget::OnEmulationStarting);
     connect(this, &GMainWindow::EmulationStopping, registersWidget,
@@ -741,20 +749,14 @@ void GMainWindow::InitializeDebugWidgets() {
 
     if (Pica::g_debug_context) {
         graphicsWidget = new GPUCommandStreamWidget(system, this);
-        addDockWidget(Qt::RightDockWidgetArea, graphicsWidget);
-        graphicsWidget->hide();
-        debug_menu->addAction(graphicsWidget->toggleViewAction());
+        add_debug_dock(Qt::RightDockWidgetArea, graphicsWidget);
 
         graphicsCommandsWidget = new GPUCommandListWidget(system, this);
-        addDockWidget(Qt::RightDockWidgetArea, graphicsCommandsWidget);
-        graphicsCommandsWidget->hide();
-        debug_menu->addAction(graphicsCommandsWidget->toggleViewAction());
+        add_debug_dock(Qt::RightDockWidgetArea, graphicsCommandsWidget);
 
         graphicsBreakpointsWidget =
             new GraphicsBreakPointsWidget(system, Pica::g_debug_context, this);
-        addDockWidget(Qt::RightDockWidgetArea, graphicsBreakpointsWidget);
-        graphicsBreakpointsWidget->hide();
-        debug_menu->addAction(graphicsBreakpointsWidget->toggleViewAction());
+        add_debug_dock(Qt::RightDockWidgetArea, graphicsBreakpointsWidget);
         connect(graphicsBreakpointsWidget, &GraphicsBreakPointsWidget::FrameAdvanceRequested, this,
                 [this] { AdvanceFrame(); });
         connect(graphicsBreakpointsWidget, &GraphicsBreakPointsWidget::BreakPointHit, this,
@@ -764,14 +766,10 @@ void GMainWindow::InitializeDebugWidgets() {
 
         graphicsVertexShaderWidget =
             new GraphicsVertexShaderWidget(system, Pica::g_debug_context, this);
-        addDockWidget(Qt::RightDockWidgetArea, graphicsVertexShaderWidget);
-        graphicsVertexShaderWidget->hide();
-        debug_menu->addAction(graphicsVertexShaderWidget->toggleViewAction());
+        add_debug_dock(Qt::RightDockWidgetArea, graphicsVertexShaderWidget);
 
         graphicsTracingWidget = new GraphicsTracingWidget(system, Pica::g_debug_context, this);
-        addDockWidget(Qt::RightDockWidgetArea, graphicsTracingWidget);
-        graphicsTracingWidget->hide();
-        debug_menu->addAction(graphicsTracingWidget->toggleViewAction());
+        add_debug_dock(Qt::RightDockWidgetArea, graphicsTracingWidget);
         connect(this, &GMainWindow::EmulationStarting, graphicsTracingWidget,
                 &GraphicsTracingWidget::OnEmulationStarting);
         connect(this, &GMainWindow::EmulationStopping, graphicsTracingWidget,
@@ -779,27 +777,21 @@ void GMainWindow::InitializeDebugWidgets() {
     }
 
     waitTreeWidget = new WaitTreeWidget(system, this);
-    addDockWidget(Qt::LeftDockWidgetArea, waitTreeWidget);
-    waitTreeWidget->hide();
-    debug_menu->addAction(waitTreeWidget->toggleViewAction());
+    add_debug_dock(Qt::LeftDockWidgetArea, waitTreeWidget);
     connect(this, &GMainWindow::EmulationStarting, waitTreeWidget,
             &WaitTreeWidget::OnEmulationStarting);
     connect(this, &GMainWindow::EmulationStopping, waitTreeWidget,
             &WaitTreeWidget::OnEmulationStopping);
 
     lleServiceModulesWidget = new LLEServiceModulesWidget(this);
-    addDockWidget(Qt::RightDockWidgetArea, lleServiceModulesWidget);
-    lleServiceModulesWidget->hide();
-    debug_menu->addAction(lleServiceModulesWidget->toggleViewAction());
+    add_debug_dock(Qt::RightDockWidgetArea, lleServiceModulesWidget);
     connect(this, &GMainWindow::EmulationStarting,
-            [this] { lleServiceModulesWidget->setDisabled(true); });
-    connect(this, &GMainWindow::EmulationStopping, waitTreeWidget,
-            [this] { lleServiceModulesWidget->setDisabled(false); });
+            [this] { Debugger::SetDockAvailable(lleServiceModulesWidget, false); });
+    connect(this, &GMainWindow::EmulationStopping, lleServiceModulesWidget,
+            [this] { Debugger::SetDockAvailable(lleServiceModulesWidget, true); });
 
     ipcRecorderWidget = new IPCRecorderWidget(system, this);
-    addDockWidget(Qt::RightDockWidgetArea, ipcRecorderWidget);
-    ipcRecorderWidget->hide();
-    debug_menu->addAction(ipcRecorderWidget->toggleViewAction());
+    add_debug_dock(Qt::RightDockWidgetArea, ipcRecorderWidget);
     connect(this, &GMainWindow::EmulationStarting, ipcRecorderWidget,
             &IPCRecorderWidget::OnEmulationStarting);
 }
@@ -3207,6 +3199,7 @@ void GMainWindow::OnCreateGraphicsSurfaceViewer() {
     auto graphicsSurfaceViewerWidget =
         new GraphicsSurfaceWidget(system, Pica::g_debug_context, this);
     addDockWidget(Qt::RightDockWidgetArea, graphicsSurfaceViewerWidget);
+    Debugger::ConfigureDockWorkspace(graphicsSurfaceViewerWidget);
     // TODO: Maybe graphicsSurfaceViewerWidget->setFloating(true);
     graphicsSurfaceViewerWidget->show();
 }

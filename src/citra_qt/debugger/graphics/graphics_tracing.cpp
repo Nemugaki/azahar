@@ -13,25 +13,31 @@
 #include <QHeaderView>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMainWindow>
 #include <QMessageBox>
 #include <QPushButton>
+#include <QScrollBar>
+#include <QSignalBlocker>
 #include <QSpinBox>
 #include <QTreeWidget>
 #include <QTimer>
 #include <nihstro/float24.h>
 #include "citra_qt/debugger/graphics/graphics_surface.h"
 #include "citra_qt/debugger/graphics/graphics_tracing.h"
+#include "citra_qt/debugger/dock_workspace.h"
 #include "common/common_types.h"
 #include "common/settings.h"
 #include "core/core.h"
 #include "core/tracer/recorder.h"
+#include "debugger/capture_file.h"
 #include "video_core/gpu.h"
 #include "video_core/pica/pica_core.h"
 
 GraphicsTracingWidget::GraphicsTracingWidget(Core::System& system_,
                                              std::shared_ptr<Pica::DebugContext> debug_context,
                                              QWidget* parent)
-    : BreakPointObserverDock(debug_context, tr("Pica Trace & Timeline"), parent), system{system_} {
+    : BreakPointObserverDock(debug_context, tr("Pica Trace & Timeline"), parent), system{system_},
+      render_sessions{debug_context ? debug_context->GetRenderSessions() : nullptr} {
 
     setObjectName(QStringLiteral("CiTracing"));
 
@@ -56,8 +62,8 @@ GraphicsTracingWidget::GraphicsTracingWidget(Core::System& system_,
     follow_live->setChecked(true);
     freeze_timeline = new QCheckBox(tr("Freeze"));
     freeze_timeline->setToolTip(tr("Stops automatic refresh without pausing emulation."));
-    if (debug_context) {
-        debug_context->SetTimelineFrameLimit(frame_limit->value());
+    if (render_sessions) {
+        render_sessions->GetLive()->SetFrameLimit(frame_limit->value());
     }
     timeline = new QTreeWidget;
     timeline->setColumnCount(6);
@@ -103,8 +109,8 @@ GraphicsTracingWidget::GraphicsTracingWidget(Core::System& system_,
             &GraphicsTracingWidget::FilterTimeline);
     connect(frame_limit, qOverload<int>(&QSpinBox::valueChanged), this, [this](int value) {
         Settings::values.render_debugger_frame_limit = static_cast<u32>(value);
-        if (auto context = context_weak.lock()) {
-            context->SetTimelineFrameLimit(static_cast<u32>(value));
+        if (render_sessions) {
+            render_sessions->GetLive()->SetFrameLimit(static_cast<u32>(value));
         }
         RefreshTimeline();
     });
@@ -147,6 +153,33 @@ GraphicsTracingWidget::GraphicsTracingWidget(Core::System& system_,
     timeline_controls->addWidget(freeze_timeline);
     timeline_controls->addWidget(refresh_timeline);
     main_layout->addLayout(timeline_controls);
+    auto* session_controls = new QHBoxLayout;
+    auto* session_label = new QLabel(tr("Session:"));
+    session_selector = new QComboBox;
+    session_selector->setAccessibleName(tr("Render debugger session"));
+    session_label->setBuddy(session_selector);
+    auto* import_capture = new QPushButton(tr("Import Capture"));
+    auto* export_capture = new QPushButton(tr("Export Capture"));
+    remove_capture = new QPushButton(tr("Remove Capture"));
+    connect(session_selector, qOverload<int>(&QComboBox::currentIndexChanged), this,
+            [this](int index) {
+                if (index >= 0 && render_sessions) {
+                    render_sessions->Select(
+                        session_selector->itemData(index).toULongLong());
+                    remove_capture->setEnabled(render_sessions->GetActiveId() !=
+                                               Debugger::RenderSessionManager::LiveSessionId);
+                    RefreshTimeline();
+                }
+            });
+    connect(import_capture, &QPushButton::clicked, this, &GraphicsTracingWidget::ImportCapture);
+    connect(export_capture, &QPushButton::clicked, this, &GraphicsTracingWidget::ExportCapture);
+    connect(remove_capture, &QPushButton::clicked, this, &GraphicsTracingWidget::RemoveCapture);
+    session_controls->addWidget(session_label);
+    session_controls->addWidget(session_selector);
+    session_controls->addWidget(import_capture);
+    session_controls->addWidget(export_capture);
+    session_controls->addWidget(remove_capture);
+    main_layout->addLayout(session_controls);
     main_layout->addWidget(timeline);
     main_layout->addWidget(timeline_details);
     auto* target_controls = new QHBoxLayout;
@@ -169,6 +202,7 @@ GraphicsTracingWidget::GraphicsTracingWidget(Core::System& system_,
     main_layout->addLayout(target_controls);
     main_widget->setLayout(main_layout);
     setWidget(main_widget);
+    RefreshSessions();
 }
 
 void GraphicsTracingWidget::StartRecording() {
@@ -267,12 +301,37 @@ void GraphicsTracingWidget::OnBreakPointHit(Pica::DebugContext::Event event, con
 }
 
 void GraphicsTracingWidget::RefreshTimeline() {
-    auto context = context_weak.lock();
-    if (!context) {
+    if (!render_sessions) {
         return;
     }
-    displayed_entries = context->GetTimeline(UINT32_MAX, 4096,
-                                             Pica::DebugContext::TimelineKind::Draw, false);
+    const auto session_id = render_sessions->GetActiveId();
+    const auto session = render_sessions->GetActive();
+    const auto status = session->GetStatus();
+    if (have_displayed_status && displayed_session_id == session_id &&
+        displayed_status.count == status.count &&
+        displayed_status.oldest_sequence == status.oldest_sequence &&
+        displayed_status.newest_sequence == status.newest_sequence &&
+        displayed_status.truncated == status.truncated) {
+        return;
+    }
+
+    const auto* current = timeline->currentItem();
+    std::optional<u32> selected_sequence;
+    if (current && current->parent()) {
+        const int index = current->data(0, Qt::UserRole).toInt();
+        if (index >= 0 && index < static_cast<int>(displayed_entries.size())) {
+            selected_sequence = displayed_entries[index].sequence;
+        }
+    }
+    auto* scroll_bar = timeline->verticalScrollBar();
+    const int old_scroll = scroll_bar->value();
+    const bool was_at_bottom = old_scroll >= scroll_bar->maximum();
+
+    displayed_entries = session->Query(
+        {.start = Debugger::RenderSession::Latest, .count = 4096});
+    displayed_session_id = session_id;
+    displayed_status = session->GetStatus();
+    have_displayed_status = true;
     timeline->clear();
     QTreeWidgetItem* frame_item = nullptr;
     u32 displayed_frame = UINT32_MAX;
@@ -286,7 +345,7 @@ void GraphicsTracingWidget::RefreshTimeline() {
             frame_item->setFirstColumnSpanned(true);
             frame_item->setExpanded(true);
         }
-        if (entry.kind == Pica::DebugContext::TimelineKind::Frame) {
+        if (entry.kind == Debugger::TimelineKind::Frame) {
             continue;
         }
         QStringList changes;
@@ -301,9 +360,9 @@ void GraphicsTracingWidget::RefreshTimeline() {
         const QString changed = changes.join(QStringLiteral(", "));
         const QString call = [&] {
             switch (entry.draw_info.mode) {
-            case Pica::DebugContext::DrawMode::Indexed:
+            case Debugger::DrawMode::Indexed:
                 return tr("Draw %1 — indexed").arg(entry.draw);
-            case Pica::DebugContext::DrawMode::Immediate:
+            case Debugger::DrawMode::Immediate:
                 return tr("Draw %1 — immediate").arg(entry.draw);
             default:
                 return tr("Draw %1 — arrays").arg(entry.draw);
@@ -328,12 +387,29 @@ void GraphicsTracingWidget::RefreshTimeline() {
     }
     timeline->header()->setSectionResizeMode(0, QHeaderView::Stretch);
     FilterTimeline(timeline_filter->text());
-    if (follow_live->isChecked() && timeline->topLevelItemCount()) {
+    if (follow_live->isChecked() && was_at_bottom && timeline->topLevelItemCount()) {
         auto* frame = timeline->topLevelItem(timeline->topLevelItemCount() - 1);
         if (frame->childCount()) {
             timeline->setCurrentItem(frame->child(frame->childCount() - 1));
             timeline->scrollToItem(timeline->currentItem());
         }
+    } else {
+        if (selected_sequence) {
+            for (int frame = 0; frame < timeline->topLevelItemCount(); ++frame) {
+                auto* frame_item = timeline->topLevelItem(frame);
+                for (int draw = 0; draw < frame_item->childCount(); ++draw) {
+                    auto* item = frame_item->child(draw);
+                    const int index = item->data(0, Qt::UserRole).toInt();
+                    if (index >= 0 && index < static_cast<int>(displayed_entries.size()) &&
+                        displayed_entries[index].sequence == *selected_sequence) {
+                        timeline->setCurrentItem(item);
+                        frame = timeline->topLevelItemCount();
+                        break;
+                    }
+                }
+            }
+        }
+        scroll_bar->setValue(old_scroll);
     }
 }
 
@@ -382,32 +458,125 @@ void GraphicsTracingWidget::SelectTimelineEntry(QTreeWidgetItem* current) {
             .arg(entry.target.depth_address, 8, 16, QLatin1Char('0'))
             .arg(entry.target.width)
             .arg(entry.target.height));
-    open_color_target->setEnabled(entry.target.color_address != 0);
-    open_depth_target->setEnabled(entry.target.depth_address != 0);
+    const bool live = render_sessions &&
+                      render_sessions->GetActiveId() ==
+                          Debugger::RenderSessionManager::LiveSessionId;
+    open_color_target->setEnabled(live && entry.target.color_address != 0);
+    open_depth_target->setEnabled(live && entry.target.depth_address != 0);
+    if (!live) {
+        timeline_details->setText(timeline_details->text() +
+                                  tr("\nImported metadata has no render-target bytes."));
+    }
 }
 
 void GraphicsTracingWidget::OpenColorTarget() {
-    if (!selected_target) {
+    OpenTarget(false);
+}
+
+void GraphicsTracingWidget::OpenDepthTarget() {
+    OpenTarget(true);
+}
+
+void GraphicsTracingWidget::OpenTarget(bool depth) {
+    if (!selected_target || !render_sessions ||
+        render_sessions->GetActiveId() != Debugger::RenderSessionManager::LiveSessionId) {
         return;
     }
     auto* viewer = new GraphicsSurfaceWidget(system, context_weak.lock(), parentWidget());
+    Debugger::ConfigureDockWorkspace(viewer);
+    if (auto* main = qobject_cast<QMainWindow*>(parentWidget())) {
+        main->addDockWidget(Qt::RightDockWidgetArea, viewer);
+    }
     viewer->setAttribute(Qt::WA_DeleteOnClose);
     viewer->setFloating(true);
-    viewer->ViewRenderTarget(*selected_target, false);
+    viewer->ViewRenderTarget(*selected_target, depth);
     viewer->resize(640, 520);
     viewer->show();
 }
 
-void GraphicsTracingWidget::OpenDepthTarget() {
-    if (!selected_target) {
+void GraphicsTracingWidget::ImportCapture() {
+    if (!render_sessions) {
         return;
     }
-    auto* viewer = new GraphicsSurfaceWidget(system, context_weak.lock(), parentWidget());
-    viewer->setAttribute(Qt::WA_DeleteOnClose);
-    viewer->setFloating(true);
-    viewer->ViewRenderTarget(*selected_target, true);
-    viewer->resize(640, 520);
-    viewer->show();
+    const QString filename = QFileDialog::getOpenFileName(
+        this, tr("Import Render Debugger Capture"), {}, tr("Render Debugger Capture (*.rdbg)"));
+    if (filename.isEmpty()) {
+        return;
+    }
+    Debugger::Capture capture;
+    Debugger::CaptureLimits limits;
+    limits.total_bytes = static_cast<u64>(Settings::values.debugger_cache_mb.GetValue()) << 20;
+    limits.record_bytes = limits.total_bytes;
+    std::string error;
+    if (!Debugger::LoadCapture(filename.toStdString(), capture, error, limits)) {
+        QMessageBox::critical(this, tr("Capture import failed"), QString::fromStdString(error));
+        return;
+    }
+    const auto id = render_sessions->AddImported(std::move(capture));
+    if (!id) {
+        QMessageBox::critical(this, tr("Capture import failed"),
+                              tr("The capture is invalid or the imported-session limit was reached."));
+        return;
+    }
+    RefreshSessions(id);
+    RefreshTimeline();
+}
+
+void GraphicsTracingWidget::ExportCapture() {
+    if (!render_sessions) {
+        return;
+    }
+    const QString filename = QFileDialog::getSaveFileName(
+        this, tr("Export Render Debugger Capture"), QStringLiteral("render-capture.rdbg"),
+        tr("Render Debugger Capture (*.rdbg)"));
+    if (filename.isEmpty()) {
+        return;
+    }
+    Debugger::Capture capture;
+    if (!render_sessions->Snapshot(render_sessions->GetActiveId(), capture)) {
+        return;
+    }
+    std::string error;
+    if (!Debugger::SaveCapture(filename.toStdString(), capture, error)) {
+        QMessageBox::critical(this, tr("Capture export failed"), QString::fromStdString(error));
+    }
+}
+
+void GraphicsTracingWidget::RemoveCapture() {
+    if (!render_sessions) {
+        return;
+    }
+    render_sessions->Remove(render_sessions->GetActiveId());
+    RefreshSessions(Debugger::RenderSessionManager::LiveSessionId);
+    RefreshTimeline();
+}
+
+void GraphicsTracingWidget::RefreshSessions(Debugger::u64 selected) {
+    if (!render_sessions) {
+        return;
+    }
+    if (!selected) {
+        selected = render_sessions->GetActiveId();
+    }
+    const QSignalBlocker blocker{session_selector};
+    session_selector->clear();
+    int selected_index = 0;
+    for (const auto& descriptor : render_sessions->List()) {
+        const QString name = descriptor.live
+                                 ? tr("Live — %1/%2")
+                                       .arg(QString::fromStdString(descriptor.producer),
+                                            QString::fromStdString(descriptor.backend))
+                                 : tr("Imported — %1/%2")
+                                       .arg(QString::fromStdString(descriptor.producer),
+                                            QString::fromStdString(descriptor.backend));
+        session_selector->addItem(name, QVariant::fromValue<qulonglong>(descriptor.id));
+        if (descriptor.id == selected) {
+            selected_index = session_selector->count() - 1;
+        }
+    }
+    session_selector->setCurrentIndex(selected_index);
+    render_sessions->Select(selected);
+    remove_capture->setEnabled(selected != Debugger::RenderSessionManager::LiveSessionId);
 }
 
 void GraphicsTracingWidget::OnResumed() {

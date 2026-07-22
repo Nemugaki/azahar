@@ -15,11 +15,12 @@ The main features are:
   - Exposes dedicated Pica breakpoint resume as well as normal and CPU-debug resume controls.
   - Reports a unified pause reason and supports blocking waits, so scripts can synchronize with user, CPU, Pica, and frame-advance pauses without polling.
   - Creates atomic, bounded ARM/Pica captures and compact byte-level diffs for comparing debugger states.
-  - Uses protocol v2 validation and explicit error replies, separates memory reads from default-off guest-memory writes, retries requests safely, and reports bind failures.
+  - Uses protocol validation and explicit error replies, separates memory reads from default-off guest-memory writes, retries requests safely, and reports bind failures.
   - Lists, pins, deletes, and reports cache use for immutable debugger captures; paged Pica snapshot generations remain readable while newer captures arrive.
   - Supports savestate loading and saving by slot, plus screenshots to a chosen output path.
   - Reports connected client count and supports a configurable port for running multiple instances.
   - Gates memory, CPU, Pica, savestate, screenshot, and emulator-control access independently in the UI.
+  - Lists, selects, imports, exports, and removes render-debugger sessions. Host-path capture access is independently gated and disabled by default.
 - Qt debugger improvements use the same underlying state as RPC:
   - Breakpoint-aware frame advance from normal pauses, CPU-debug pauses, and Pica GPU breakpoints.
   - Structured conditional Pica breakpoint editing with field, value, mask, validation, and current-value helpers.
@@ -29,6 +30,8 @@ The main features are:
   - Surface channel/alpha views and raw export, shader entry-point navigation and raw words, and command-register before/after deltas.
   - Shared current color/depth render-target inspection in the surface viewer.
   - Per-core ARM register selection with unavailable-state reporting and previous-capture change highlighting.
+  - Debugger tabs can dock on every edge, tab or nest together, float as non-modal windows, and remain in a static workspace while their content is enabled or disabled.
+- A Qt-free render-debugger library is shared by the emulator producer, Qt, and RPC. Its bounded live session and immutable imported sessions use a documented, versioned `.rdbg` interchange format; captures are render metadata, not emulator-state rewind or replay.
 - Fixed an issue that CiTrace *apparently* had an issue since a GPU refactor from 2023.
 - CiTrace and command histories are bounded by the debugger cache limit; incomplete traces are identified instead of silently saved.
 

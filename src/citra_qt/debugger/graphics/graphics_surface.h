@@ -7,6 +7,7 @@
 #include <QLabel>
 #include <QPushButton>
 #include "citra_qt/debugger/graphics/graphics_breakpoint_observer.h"
+#include "debugger/render_session.h"
 
 class QComboBox;
 class QSpinBox;
@@ -80,7 +81,7 @@ public:
                                    std::shared_ptr<Pica::DebugContext> debug_context,
                                    QWidget* parent = nullptr);
     void Pick(int x, int y);
-    void ViewRenderTarget(const Pica::DebugContext::RenderTargetInfo& target, bool depth);
+    void ViewRenderTarget(const Debugger::RenderTarget& target, bool depth);
 
 public slots:
     void OnSurfaceSourceChanged(int new_value);

@@ -7,6 +7,7 @@
 #include <optional>
 #include <vector>
 #include "citra_qt/debugger/graphics/graphics_breakpoint_observer.h"
+#include "debugger/render_session.h"
 
 namespace Core {
 class System;
@@ -15,6 +16,7 @@ class System;
 class EmuThread;
 class QLabel;
 class QCheckBox;
+class QComboBox;
 class QLineEdit;
 class QPushButton;
 class QSpinBox;
@@ -41,6 +43,10 @@ private slots:
     void SelectTimelineEntry(QTreeWidgetItem* current);
     void OpenColorTarget();
     void OpenDepthTarget();
+    void ImportCapture();
+    void ExportCapture();
+    void RemoveCapture();
+    void RefreshSessions(Debugger::u64 selected = 0);
 
     void OnBreakPointHit(Pica::DebugContext::Event event, const void* data) override;
     void OnResumed() override;
@@ -51,7 +57,10 @@ signals:
     void SetAbortTracingButtonEnabled(bool enable);
 
 private:
+    void OpenTarget(bool depth);
+
     Core::System& system;
+    std::shared_ptr<Debugger::RenderSessionManager> render_sessions;
     QWidget* recording_controls;
     QLineEdit* timeline_filter;
     QSpinBox* frame_limit;
@@ -61,6 +70,11 @@ private:
     QLabel* timeline_details;
     QPushButton* open_color_target;
     QPushButton* open_depth_target;
-    std::vector<Pica::DebugContext::TimelineEntry> displayed_entries;
-    std::optional<Pica::DebugContext::RenderTargetInfo> selected_target;
+    QComboBox* session_selector;
+    QPushButton* remove_capture;
+    std::vector<Debugger::TimelineEntry> displayed_entries;
+    std::optional<Debugger::RenderTarget> selected_target;
+    Debugger::TimelineStatus displayed_status{};
+    Debugger::u64 displayed_session_id{};
+    bool have_displayed_status{};
 };

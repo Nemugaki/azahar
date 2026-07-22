@@ -1,0 +1,120 @@
+// Copyright Azahar Emulator Project
+// Licensed under GPLv2 or any later version
+
+#include <QDockWidget>
+#include <QHBoxLayout>
+#include <QPushButton>
+#include <QVariant>
+#include <QVBoxLayout>
+#include <QWidget>
+#include "citra_qt/debugger/dock_workspace.h"
+
+namespace Debugger {
+namespace {
+
+constexpr auto ContentProperty = "debuggerWorkspaceContent";
+constexpr auto ToggleProperty = "debuggerWorkspaceToggle";
+constexpr auto EnabledProperty = "debuggerWorkspaceEnabled";
+constexpr auto AvailableProperty = "debuggerWorkspaceAvailable";
+
+void ApplyDockState(QDockWidget* dock) {
+    auto* content = static_cast<QWidget*>(dock->property(ContentProperty).value<QObject*>());
+    auto* toggle = static_cast<QPushButton*>(dock->property(ToggleProperty).value<QObject*>());
+    if (!content || !toggle) {
+        return;
+    }
+
+    dock->setEnabled(true);
+    toggle->parentWidget()->setEnabled(true);
+    toggle->setEnabled(true);
+
+    const bool user_enabled = dock->property(EnabledProperty).toBool();
+    const bool active = user_enabled && dock->property(AvailableProperty).toBool();
+    dock->widget()->setEnabled(true);
+    toggle->setEnabled(true);
+    content->setEnabled(active);
+    content->setUpdatesEnabled(active);
+    if (active) {
+        content->update();
+    }
+
+    toggle->setText(user_enabled ? QObject::tr("Disable") : QObject::tr("Enable"));
+    toggle->setToolTip(user_enabled
+                           ? QObject::tr("Disable this debugger without changing the workspace")
+                           : QObject::tr("Enable this debugger without changing the workspace"));
+}
+
+} // namespace
+
+void ConfigureDockWorkspace(QDockWidget* dock) {
+    if (!dock || dock->property(ContentProperty).isValid()) {
+        return;
+    }
+
+    QWidget* content = dock->widget();
+    if (!content) {
+        return;
+    }
+
+    const bool available = dock->isEnabled();
+    content->setParent(nullptr);
+    dock->setWidget(nullptr);
+    dock->setEnabled(true);
+    dock->setAllowedAreas(Qt::AllDockWidgetAreas);
+    dock->setFeatures(QDockWidget::DockWidgetClosable | QDockWidget::DockWidgetMovable |
+                      QDockWidget::DockWidgetFloatable);
+    dock->setWindowModality(Qt::NonModal);
+
+    auto* container = new QWidget(dock);
+    auto* layout = new QVBoxLayout(container);
+    auto* controls = new QHBoxLayout;
+    auto* toggle = new QPushButton(QObject::tr("Disable"), container);
+    toggle->setCheckable(true);
+    toggle->setChecked(true);
+    toggle->setAccessibleName(QObject::tr("Enable or disable %1").arg(dock->windowTitle()));
+    controls->addStretch();
+    controls->addWidget(toggle);
+    layout->setContentsMargins(4, 4, 4, 4);
+    layout->setSpacing(4);
+    layout->addLayout(controls);
+    layout->addWidget(content);
+    dock->setWidget(container);
+    container->setEnabled(true);
+    toggle->setEnabled(true);
+
+    dock->setProperty(ContentProperty, QVariant::fromValue(static_cast<QObject*>(content)));
+    dock->setProperty(ToggleProperty, QVariant::fromValue(static_cast<QObject*>(toggle)));
+    dock->setProperty(EnabledProperty, true);
+    dock->setProperty(AvailableProperty, available);
+
+    QObject::connect(toggle, &QPushButton::toggled, dock, [dock](bool enabled) {
+        dock->setProperty(EnabledProperty, enabled);
+        ApplyDockState(dock);
+    });
+    QObject::connect(dock, &QDockWidget::topLevelChanged, dock, [dock](bool floating) {
+        if (floating) {
+            // A floating debugger is a normal peer window, never a disabled/modal transient.
+            dock->setWindowModality(Qt::NonModal);
+            dock->setEnabled(true);
+        }
+    });
+    ApplyDockState(dock);
+}
+
+void SetDockAvailable(QDockWidget* dock, bool available) {
+    if (!dock || !dock->property(ContentProperty).isValid()) {
+        if (dock) {
+            dock->setEnabled(available);
+        }
+        return;
+    }
+    dock->setProperty(AvailableProperty, available);
+    ApplyDockState(dock);
+}
+
+bool IsDockActive(const QDockWidget* dock) {
+    return dock && dock->property(EnabledProperty).toBool() &&
+           dock->property(AvailableProperty).toBool();
+}
+
+} // namespace Debugger

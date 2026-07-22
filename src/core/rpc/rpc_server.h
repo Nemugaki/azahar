@@ -55,6 +55,8 @@ private:
                           u32 timeout_ms, u32 reason_mask);
     void HandleDebugCapture(Packet& packet, DebugCaptureOperation operation, u32 id, u32 argument,
                             u32 start, u32 count);
+    void HandleRenderSession(Packet& packet, RenderSessionOperation operation, u64 id, u32 start,
+                             u32 count, const std::string& path);
     u32 GetEnabledCapabilities() const;
     bool IsPacketTypeEnabled(PacketType packet_type) const;
     bool IsEmulationControlEnabled(EmulationControl operation) const;

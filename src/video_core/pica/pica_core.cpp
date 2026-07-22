@@ -624,7 +624,7 @@ void PicaCore::SubmitImmediate(u32 value) {
 void PicaCore::DrawImmediate() {
     UpdateDebugRenderTarget();
     if (debug_context) {
-        debug_context->OnDraw({DebugContext::DrawMode::Immediate, 1,
+        debug_context->OnDraw({Debugger::DrawMode::Immediate, 1,
                                static_cast<u32>(regs.internal.pipeline.triangle_topology.Value()),
                                0,
                                regs.internal.vs.main_offset});
@@ -676,7 +676,7 @@ void PicaCore::DrawArrays(bool is_indexed) {
     // Track vertex in the debug recorder.
     if (debug_context) {
         debug_context->OnDraw(
-            {is_indexed ? DebugContext::DrawMode::Indexed : DebugContext::DrawMode::Arrays,
+            {is_indexed ? Debugger::DrawMode::Indexed : Debugger::DrawMode::Arrays,
              regs.internal.pipeline.num_vertices,
              static_cast<u32>(regs.internal.pipeline.triangle_topology.Value()),
              regs.internal.pipeline.vertex_offset, regs.internal.vs.main_offset});

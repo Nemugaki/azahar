@@ -12,6 +12,7 @@
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSpinBox>
+#include "citra_qt/debugger/dock_workspace.h"
 #include "citra_qt/debugger/graphics/graphics_surface.h"
 #include "citra_qt/util/spinbox.h"
 #include "common/color.h"
@@ -236,23 +237,23 @@ GraphicsSurfaceWidget::GraphicsSurfaceWidget(Core::System& system_,
     // Load current data - TODO: Make sure this works when emulation is not running
     if (debug_context && debug_context->at_breakpoint) {
         emit Update();
-        widget()->setEnabled(debug_context->at_breakpoint);
+        Debugger::SetDockAvailable(this, debug_context->at_breakpoint);
     } else {
-        widget()->setEnabled(false);
+        Debugger::SetDockAvailable(this, false);
     }
 }
 
 void GraphicsSurfaceWidget::OnBreakPointHit(Pica::DebugContext::Event event, const void* data) {
     emit Update();
-    widget()->setEnabled(true);
+    Debugger::SetDockAvailable(this, true);
 }
 
 void GraphicsSurfaceWidget::OnResumed() {
-    widget()->setEnabled(false);
+    Debugger::SetDockAvailable(this, false);
 }
 
 void GraphicsSurfaceWidget::ViewRenderTarget(
-    const Pica::DebugContext::RenderTargetInfo& target, bool depth) {
+    const Debugger::RenderTarget& target, bool depth) {
     surface_source = Source::Custom;
     surface_source_list->setCurrentIndex(static_cast<int>(Source::Custom));
     surface_address = depth ? target.depth_address : target.color_address;
@@ -470,8 +471,8 @@ void GraphicsSurfaceWidget::OnUpdate() {
 
     const auto& regs = system.GPU().PicaCore().regs.internal;
     const auto context = context_weak.lock();
-    const auto target = context ? context->GetRenderTargetInfo()
-                                : Pica::DebugContext::RenderTargetInfo{};
+    const auto target = context ? context->GetRenderSession()->GetRenderTarget()
+                                : Debugger::RenderTarget{};
     switch (surface_source) {
     case Source::ColorBuffer: {
         surface_address = target.color_address;

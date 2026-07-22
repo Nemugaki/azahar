@@ -7,6 +7,7 @@
 #include <QComboBox>
 #include <QLabel>
 #include <QTreeWidgetItem>
+#include "citra_qt/debugger/dock_workspace.h"
 #include "citra_qt/debugger/registers.h"
 #include "citra_qt/util/util.h"
 #include "core/arm/arm_interface.h"
@@ -67,7 +68,7 @@ RegistersWidget::RegistersWidget(Core::System& system_, QWidget* parent)
             cpsr->child(i)->child(x)->setFont(1, font);
         }
     }
-    setEnabled(false);
+    Debugger::SetDockAvailable(this, false);
 }
 
 RegistersWidget::~RegistersWidget() = default;
@@ -148,7 +149,7 @@ void RegistersWidget::OnEmulationStarting(EmuThread* emu_thread) {
     for (u32 core = 0; core < system.GetNumCores(); ++core) {
         core_selector->addItem(tr("Core %1").arg(core));
     }
-    setEnabled(true);
+    Debugger::SetDockAvailable(this, true);
 }
 
 void RegistersWidget::OnEmulationStopping() {
@@ -186,7 +187,7 @@ void RegistersWidget::OnEmulationStopping() {
     vfp_system_registers->child(0)->setText(1, QString{});
     vfp_system_registers->child(1)->setText(1, QString{});
 
-    setEnabled(false);
+    Debugger::SetDockAvailable(this, false);
 }
 
 void RegistersWidget::CreateCPSRChildren() {

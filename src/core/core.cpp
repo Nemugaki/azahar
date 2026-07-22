@@ -146,8 +146,9 @@ DebugCaptureInfo System::CreateDebugCapture() {
     pica.ReadSnapshot(pica_info.generation, 0, pica_data);
 
     if (Pica::g_debug_context) {
-        const auto target = Pica::g_debug_context->GetRenderTargetInfo();
-        const auto position = Pica::g_debug_context->GetTimelinePosition();
+        const auto session = Pica::g_debug_context->GetRenderSession();
+        const auto target = session->GetRenderTarget();
+        const auto position = session->GetPosition();
         capture.header.frame = position.frame;
         capture.header.draw = position.draw;
         capture.header.color_address = target.color_address;

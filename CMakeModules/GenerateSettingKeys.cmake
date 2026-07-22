@@ -130,6 +130,7 @@ foreach(KEY IN ITEMS
     "rpc_allow_pica_breakpoints"
     "rpc_allow_pica_command_list"
     "rpc_allow_pica_vertex_shader"
+    "rpc_allow_render_captures"
     "debugger_cache_mb"
     "log_filter"
     "log_regex_filter"

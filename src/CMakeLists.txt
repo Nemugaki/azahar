@@ -188,6 +188,7 @@ if(ENABLE_BUILTIN_KEYBLOB)
 endif()
 
 add_subdirectory(common)
+add_subdirectory(debugger)
 add_subdirectory(core)
 add_subdirectory(video_core)
 add_subdirectory(audio_core)

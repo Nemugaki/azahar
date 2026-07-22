@@ -14,6 +14,7 @@
 #include <QSignalMapper>
 #include <QSpinBox>
 #include <QTreeView>
+#include "citra_qt/debugger/dock_workspace.h"
 #include "citra_qt/debugger/graphics/graphics_vertex_shader.h"
 #include "citra_qt/util/util.h"
 #include "core/core.h"
@@ -476,17 +477,17 @@ GraphicsVertexShaderWidget::GraphicsVertexShaderWidget(
     main_widget->setLayout(main_layout);
     setWidget(main_widget);
 
-    widget()->setEnabled(false);
+    Debugger::SetDockAvailable(this, false);
 }
 
 void GraphicsVertexShaderWidget::OnBreakPointHit(Pica::DebugContext::Event event,
                                                  const void* data) {
     if (event != Pica::DebugContext::Event::VertexShaderInvocation) {
-        widget()->setEnabled(false);
+        Debugger::SetDockAvailable(this, false);
         return;
     }
     Reload(true, data);
-    widget()->setEnabled(true);
+    Debugger::SetDockAvailable(this, true);
 }
 
 void GraphicsVertexShaderWidget::Reload(bool replace_vertex_data, const void* vertex_data) {
@@ -556,7 +557,7 @@ void GraphicsVertexShaderWidget::Reload(bool replace_vertex_data, const void* ve
 }
 
 void GraphicsVertexShaderWidget::OnResumed() {
-    widget()->setEnabled(false);
+    Debugger::SetDockAvailable(this, false);
 }
 
 void GraphicsVertexShaderWidget::OnInputAttributeChanged(int index) {

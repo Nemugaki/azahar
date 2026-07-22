@@ -11,6 +11,7 @@
 #include "core/memory.h"
 #include "core/rpc/packet.h"
 #include "core/rpc/rpc_server.h"
+#include "debugger/capture_file.h"
 #include "video_core/debug_utils/debug_utils.h"
 #include "video_core/gpu.h"
 #include "video_core/gpu_debugger.h"
@@ -226,6 +227,11 @@ u32 RPCServer::GetEnabledCapabilities() const {
         (CAPABILITY_CPU_REGISTERS | CAPABILITY_PICA_SNAPSHOT)) {
         capabilities |= CAPABILITY_DEBUG_CAPTURE;
     }
+    if (Settings::values.pica_debugging.GetValue() &&
+        (Settings::values.rpc_allow_pica_command_list.GetValue() ||
+         Settings::values.rpc_allow_render_captures.GetValue())) {
+        capabilities |= CAPABILITY_RENDER_SESSIONS;
+    }
     return capabilities;
 }
 
@@ -263,9 +269,114 @@ bool RPCServer::IsPacketTypeEnabled(PacketType packet_type) const {
         return capabilities & CAPABILITY_DEBUG_STATE;
     case PacketType::DebugCapture:
         return capabilities & CAPABILITY_DEBUG_CAPTURE;
+    case PacketType::RenderSession:
+        return capabilities & CAPABILITY_RENDER_SESSIONS;
     default:
         return false;
     }
+}
+
+void RPCServer::HandleRenderSession(Packet& packet, RenderSessionOperation operation, u64 id,
+                                    u32 start, u32 count, const std::string& path) {
+    const bool file_operation = operation == RenderSessionOperation::Import ||
+                                operation == RenderSessionOperation::Export;
+    if (file_operation && !Settings::values.rpc_allow_render_captures.GetValue()) {
+        SendError(packet, Error::PermissionDenied);
+        return;
+    }
+    const auto context = Pica::g_debug_context;
+    if (!context) {
+        SendError(packet, Error::InvalidState);
+        return;
+    }
+    const auto sessions = context->GetRenderSessions();
+    if (path.find('\0') != std::string::npos) {
+        SendError(packet, Error::InvalidArgument);
+        return;
+    }
+    const auto make_reply = [&](const Debugger::SessionDescriptor& descriptor) {
+        RenderSessionReply reply{descriptor.id, descriptor.capabilities};
+        reply.flags = static_cast<u32>(descriptor.live) |
+                      (static_cast<u32>(sessions->GetActiveId() == descriptor.id) << 1) |
+                      (static_cast<u32>(descriptor.complete) << 2) |
+                      (static_cast<u32>(descriptor.truncated) << 3);
+        std::memcpy(reply.producer.data(), descriptor.producer.data(),
+                    std::min(reply.producer.size(), descriptor.producer.size()));
+        std::memcpy(reply.backend.data(), descriptor.backend.data(),
+                    std::min(reply.backend.size(), descriptor.backend.size()));
+        return reply;
+    };
+    if (operation == RenderSessionOperation::List) {
+        const auto descriptors = sessions->List();
+        const u32 max_count = (MAX_PACKET_DATA_SIZE - sizeof(u32)) / sizeof(RenderSessionReply);
+        const u32 returned =
+            start >= descriptors.size()
+                ? 0
+                : std::min({count, max_count, static_cast<u32>(descriptors.size() - start)});
+        std::memcpy(packet.GetPacketData().data(), &returned, sizeof(returned));
+        for (u32 index = 0; index < returned; ++index) {
+            const auto reply = make_reply(descriptors[start + index]);
+            std::memcpy(packet.GetPacketData().data() + sizeof(returned) + index * sizeof(reply),
+                        &reply, sizeof(reply));
+        }
+        packet.SetPacketDataSize(sizeof(returned) + returned * sizeof(RenderSessionReply));
+        packet.SendReply();
+        return;
+    }
+
+    if (operation == RenderSessionOperation::Select) {
+        if (!sessions->Select(id)) {
+            SendError(packet, Error::NotFound);
+            return;
+        }
+    } else if (operation == RenderSessionOperation::Remove) {
+        if (!sessions->Remove(id)) {
+            SendError(packet, Error::NotFound);
+            return;
+        }
+        id = sessions->GetActiveId();
+    } else if (operation == RenderSessionOperation::Import) {
+        Debugger::Capture capture;
+        Debugger::CaptureLimits limits;
+        limits.total_bytes = static_cast<u64>(Settings::values.debugger_cache_mb.GetValue()) << 20;
+        limits.record_bytes = limits.total_bytes;
+        std::string error;
+        if (path.empty() || !Debugger::LoadCapture(path, capture, error, limits)) {
+            SendError(packet, Error::InvalidArgument);
+            return;
+        }
+        id = sessions->AddImported(std::move(capture));
+        if (!id) {
+            SendError(packet, Error::Failed);
+            return;
+        }
+    } else if (operation == RenderSessionOperation::Export) {
+        if (!id) {
+            id = sessions->GetActiveId();
+        }
+        Debugger::Capture capture;
+        std::string error;
+        if (path.empty() || !sessions->Snapshot(id, capture)) {
+            SendError(packet, path.empty() ? Error::InvalidArgument : Error::NotFound);
+            return;
+        }
+        if (!Debugger::SaveCapture(path, capture, error)) {
+            SendError(packet, Error::Failed);
+            return;
+        }
+    }
+
+    const auto descriptors = sessions->List();
+    const auto descriptor = std::ranges::find_if(
+        descriptors, [id](const auto& value) { return value.id == id; });
+    if (descriptor == descriptors.end()) {
+        SendError(packet, Error::NotFound);
+        return;
+    }
+    const auto reply = make_reply(*descriptor);
+    std::memcpy(packet.GetPacketData().data(), &reply, sizeof(reply));
+    packet.SetPacketDataSize(sizeof(reply));
+    packet.SendReply();
 }
 
 bool RPCServer::IsEmulationControlEnabled(EmulationControl operation) const {
@@ -350,15 +461,21 @@ void RPCServer::HandlePicaTimeline(Packet& packet, PicaTimelineOperation operati
         packet.SendReply();
         return;
     }
+    const auto sessions = context->GetRenderSessions();
+    const auto session = sessions->GetActive();
     if (operation == PicaTimelineOperation::Clear) {
-        context->ClearTimeline();
+        if (sessions->GetActiveId() != Debugger::RenderSessionManager::LiveSessionId) {
+            SendError(packet, Error::InvalidState);
+            return;
+        }
+        session->Clear();
     } else if (operation == PicaTimelineOperation::Read) {
         const u32 max_entries = (MAX_PACKET_DATA_SIZE - sizeof(u32)) / sizeof(PicaTimelineEntry);
-        const bool filter_kind = kind <= static_cast<u32>(Pica::DebugContext::TimelineKind::Frame);
-        const auto entries = context->GetTimeline(
-            start, std::min(count, max_entries),
-            static_cast<Pica::DebugContext::TimelineKind>(filter_kind ? kind : 0), filter_kind,
-            required_changes, target_address, shader_entry, frame);
+        const bool filter_kind = kind <= static_cast<u32>(Debugger::TimelineKind::Frame);
+        const auto entries = session->Query(
+            {start, std::min(count, max_entries),
+             static_cast<Debugger::TimelineKind>(filter_kind ? kind : 0), filter_kind,
+             required_changes, target_address, shader_entry, frame});
         const u32 returned = static_cast<u32>(entries.size());
         std::memcpy(packet.GetPacketData().data(), &returned, sizeof(returned));
         for (u32 i = 0; i < returned; ++i) {
@@ -383,7 +500,7 @@ void RPCServer::HandlePicaTimeline(Packet& packet, PicaTimelineOperation operati
         packet.SendReply();
         return;
     }
-    const auto status = context->GetTimelineStatus();
+    const auto status = session->GetStatus();
     const PicaTimelineStatus reply{status.count, status.oldest_sequence, status.newest_sequence,
                                    status.truncated};
     std::memcpy(packet.GetPacketData().data(), &reply, sizeof(reply));
@@ -396,7 +513,7 @@ void RPCServer::HandlePicaRenderTarget(Packet& packet) {
     if (!context) {
         packet.SetPacketDataSize(0);
     } else {
-        const auto target = context->GetRenderTargetInfo();
+        const auto target = context->GetRenderSessions()->GetActive()->GetRenderTarget();
         const PicaRenderTargetReply reply{target.color_address, target.depth_address, target.width,
                                           target.height, target.color_format,
                                           target.depth_format};
@@ -840,6 +957,9 @@ bool RPCServer::ValidatePacket(const PacketHeader& header) const {
         return header.packet_size >= sizeof(u32) && header.packet_size <= 4 * sizeof(u32);
     case PacketType::PicaRenderTarget:
         return header.packet_size == sizeof(u32);
+    case PacketType::RenderSession:
+        return header.packet_size >= 5 * sizeof(u32) &&
+               header.packet_size <= MAX_PACKET_DATA_SIZE;
     default:
         return false;
     }
@@ -1034,6 +1154,27 @@ void RPCServer::HandleSingleRequest(std::unique_ptr<Packet> request_packet) {
             if (arg1 <= static_cast<u32>(DebugCaptureOperation::CacheStatus)) {
                 HandleDebugCapture(*request_packet, static_cast<DebugCaptureOperation>(arg1), arg2,
                                    arg3, arg4, arg5);
+                success = true;
+            }
+            break;
+        }
+        case PacketType::RenderSession: {
+            u32 id_low{};
+            u32 id_high{};
+            u32 start{};
+            u32 count{};
+            std::memcpy(&id_low, packet_data.data() + sizeof(u32), sizeof(u32));
+            std::memcpy(&id_high, packet_data.data() + 2 * sizeof(u32), sizeof(u32));
+            std::memcpy(&start, packet_data.data() + 3 * sizeof(u32), sizeof(u32));
+            std::memcpy(&count, packet_data.data() + 4 * sizeof(u32), sizeof(u32));
+            const auto operation = static_cast<RenderSessionOperation>(arg1);
+            if (arg1 <= static_cast<u32>(RenderSessionOperation::Export)) {
+                const auto path_size = request_packet->GetPacketDataSize() - 5 * sizeof(u32);
+                const std::string path{
+                    reinterpret_cast<const char*>(packet_data.data() + 5 * sizeof(u32)), path_size};
+                HandleRenderSession(*request_packet, operation,
+                                    static_cast<u64>(id_low) | static_cast<u64>(id_high) << 32,
+                                    start, count, path);
                 success = true;
             }
             break;

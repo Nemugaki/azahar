@@ -4,6 +4,7 @@
 
 #include <array>
 #include "citra_qt/debugger/wait_tree.h"
+#include "citra_qt/debugger/dock_workspace.h"
 #include "citra_qt/uisettings.h"
 #include "common/assert.h"
 #include "core/hle/kernel/event.h"
@@ -445,7 +446,7 @@ WaitTreeWidget::WaitTreeWidget(Core::System& system_, QWidget* parent)
     view = new QTreeView(this);
     view->setHeaderHidden(true);
     setWidget(view);
-    setEnabled(false);
+    Debugger::SetDockAvailable(this, false);
 }
 
 void WaitTreeWidget::OnDebugModeEntered() {
@@ -454,11 +455,11 @@ void WaitTreeWidget::OnDebugModeEntered() {
     }
     model->InitItems(system);
     view->setModel(model);
-    setEnabled(true);
+    Debugger::SetDockAvailable(this, true);
 }
 
 void WaitTreeWidget::OnDebugModeLeft() {
-    setEnabled(false);
+    Debugger::SetDockAvailable(this, false);
     view->setModel(nullptr);
     model->ClearItems();
 }
@@ -466,11 +467,11 @@ void WaitTreeWidget::OnDebugModeLeft() {
 void WaitTreeWidget::OnEmulationStarting(EmuThread* emu_thread) {
     model = new WaitTreeModel(this);
     view->setModel(model);
-    setEnabled(false);
+    Debugger::SetDockAvailable(this, false);
 }
 
 void WaitTreeWidget::OnEmulationStopping() {
     view->setModel(nullptr);
     delete model;
-    setEnabled(false);
+    Debugger::SetDockAvailable(this, false);
 }

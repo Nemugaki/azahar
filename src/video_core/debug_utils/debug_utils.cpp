@@ -61,8 +61,8 @@ void DebugContext::DoOnEvent(Event event, const void* data) {
     }
 }
 
-void DebugContext::OnDraw(const DrawInfo& info) {
-    RecordTimeline(TimelineKind::Draw, info);
+void DebugContext::OnDraw(const Debugger::DrawInfo& info) {
+    GetRenderSession()->RecordDraw(info);
     OnEvent(Event::IncomingPrimitiveBatch, &info);
 }
 
@@ -92,7 +92,7 @@ void DebugContext::ResumeUntilFrame() {
 
 void DebugContext::OnFrameBoundary() {
     ignore_breakpoints_until_frame = false;
-    RecordTimeline(TimelineKind::Frame, {});
+    GetRenderSession()->RecordFrame();
 }
 
 void DebugContext::SetBreakpointCondition(Event event, BreakPointCondition condition) {
@@ -124,146 +124,37 @@ bool DebugContext::MatchesCondition(Event event, const void* data) {
     }
 
     u32 actual{};
-    {
-        std::lock_guard lock{timeline_mutex};
-        switch (condition.field) {
-        case ConditionField::EventData:
-            if (!data || (event != Event::PicaCommandLoaded &&
-                          event != Event::PicaCommandProcessed)) {
-                return false;
-            }
-            std::memcpy(&actual, data, sizeof(actual));
-            break;
-        case ConditionField::ColorBuffer:
-            actual = render_target.color_address;
-            break;
-        case ConditionField::DepthBuffer:
-            actual = render_target.depth_address;
-            break;
-        case ConditionField::DrawIndex:
-            actual = draw_index;
-            break;
-        case ConditionField::FrameIndex:
-            actual = frame_index;
-            break;
-        case ConditionField::None:
-            return true;
+    const auto session = GetRenderSession();
+    const auto target = session->GetRenderTarget();
+    const auto position = session->GetPosition();
+    switch (condition.field) {
+    case ConditionField::EventData:
+        if (!data ||
+            (event != Event::PicaCommandLoaded && event != Event::PicaCommandProcessed)) {
+            return false;
         }
+        std::memcpy(&actual, data, sizeof(actual));
+        break;
+    case ConditionField::ColorBuffer:
+        actual = target.color_address;
+        break;
+    case ConditionField::DepthBuffer:
+        actual = target.depth_address;
+        break;
+    case ConditionField::DrawIndex:
+        actual = position.draw;
+        break;
+    case ConditionField::FrameIndex:
+        actual = position.frame;
+        break;
+    case ConditionField::None:
+        return true;
     }
     return (actual & condition.mask) == (condition.value & condition.mask);
 }
 
-void DebugContext::SetRenderTargetInfo(RenderTargetInfo info) {
-    std::lock_guard lock{timeline_mutex};
-    render_target = info;
-}
-
-DebugContext::RenderTargetInfo DebugContext::GetRenderTargetInfo() const {
-    std::lock_guard lock{timeline_mutex};
-    return render_target;
-}
-
-void DebugContext::RecordTimeline(TimelineKind kind, const DrawInfo& info) {
-    std::lock_guard lock{timeline_mutex};
-    if (kind == TimelineKind::Draw) {
-        ++draw_index;
-    } else {
-        ++frame_index;
-    }
-    u32 changed = 0;
-    changed |= render_target.color_address != previous_timeline_target.color_address ? 1U : 0U;
-    changed |= render_target.depth_address != previous_timeline_target.depth_address ? 2U : 0U;
-    changed |= render_target.width != previous_timeline_target.width ||
-                       render_target.height != previous_timeline_target.height
-                   ? 4U
-                   : 0U;
-    changed |= render_target.color_format != previous_timeline_target.color_format ||
-                       render_target.depth_format != previous_timeline_target.depth_format
-                   ? 8U
-                   : 0U;
-    previous_timeline_target = render_target;
-    timeline.push_back(
-        {timeline_sequence++, kind, frame_index, draw_index, changed, render_target, info});
-    // NOTE: This history is bounded; use per-frame chunks only if 4096 entries proves too small.
-    if (timeline.size() > 4096) {
-        timeline.pop_front();
-    }
-    // Metadata only; the independent entry cap also bounds pathological single-frame workloads.
-    if (kind == TimelineKind::Frame) {
-        const u32 frame_limit = timeline_frame_limit.load();
-        while (!timeline.empty() && timeline.front().frame + frame_limit <= frame_index) {
-            timeline.pop_front();
-        }
-    }
-}
-
-std::vector<DebugContext::TimelineEntry> DebugContext::GetTimeline(u32 start, u32 count,
-                                                                   TimelineKind kind,
-                                                                   bool filter_kind,
-                                                                   u32 required_changes,
-                                                                   u32 target_address,
-                                                                   u32 shader_entry,
-                                                                   u32 frame) const {
-    std::lock_guard lock{timeline_mutex};
-    std::vector<TimelineEntry> result;
-    const auto matches = [=](const TimelineEntry& entry) {
-        return (!filter_kind || entry.kind == kind) &&
-               (entry.changed_mask & required_changes) == required_changes &&
-               (target_address == UINT32_MAX || entry.target.color_address == target_address ||
-                entry.target.depth_address == target_address) &&
-               (shader_entry == UINT32_MAX ||
-                entry.draw_info.vertex_shader_entry == shader_entry) &&
-               (frame == UINT32_MAX || entry.frame == frame);
-    };
-    if (start == UINT32_MAX) {
-        for (auto entry = timeline.rbegin(); entry != timeline.rend() && result.size() < count;
-             ++entry) {
-            if (matches(*entry)) {
-                result.push_back(*entry);
-            }
-        }
-        std::reverse(result.begin(), result.end());
-        return result;
-    }
-    for (const auto& entry : timeline) {
-        if (entry.sequence >= start && matches(entry)) {
-            result.push_back(entry);
-            if (result.size() == count) {
-                break;
-            }
-        }
-    }
-    return result;
-}
-
-DebugContext::TimelineStatus DebugContext::GetTimelineStatus() const {
-    std::lock_guard lock{timeline_mutex};
-    return {static_cast<u32>(timeline.size()), timeline.empty() ? timeline_sequence : timeline.front().sequence,
-            timeline.empty() ? timeline_sequence : timeline.back().sequence,
-            !timeline.empty() && timeline.front().sequence != 0};
-}
-
-DebugContext::TimelinePosition DebugContext::GetTimelinePosition() const {
-    std::lock_guard lock{timeline_mutex};
-    return {frame_index, draw_index};
-}
-
-void DebugContext::ClearTimeline() {
-    std::lock_guard lock{timeline_mutex};
-    timeline.clear();
-    previous_timeline_target = render_target;
-    timeline_sequence = 0;
-    frame_index = 0;
-    draw_index = 0;
-}
-
-void DebugContext::SetTimelineFrameLimit(u32 frame_limit) {
-    timeline_frame_limit = std::max(1U, frame_limit);
-    std::lock_guard lock{timeline_mutex};
-    frame_limit = timeline_frame_limit.load();
-    while (!timeline.empty() && timeline.front().frame + frame_limit <= frame_index) {
-        timeline.pop_front();
-    }
+void DebugContext::SetRenderTargetInfo(Debugger::RenderTarget info) {
+    GetRenderSession()->SetRenderTarget(info);
 }
 
 DebugContext::BreakPointState DebugContext::GetBreakpointState() {

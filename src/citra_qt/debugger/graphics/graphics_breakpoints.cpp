@@ -398,8 +398,9 @@ void GraphicsBreakPointsWidget::UseCurrentConditionValue() {
     }
     const auto field = static_cast<Pica::DebugContext::ConditionField>(
         condition_field->currentData().toUInt());
-    const auto target = context->GetRenderTargetInfo();
-    const auto position = context->GetTimelinePosition();
+    const auto session = context->GetRenderSession();
+    const auto target = session->GetRenderTarget();
+    const auto position = session->GetPosition();
     const u32 value = field == Pica::DebugContext::ConditionField::ColorBuffer
                           ? target.color_address
                       : field == Pica::DebugContext::ConditionField::DepthBuffer

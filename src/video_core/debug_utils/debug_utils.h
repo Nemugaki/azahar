@@ -7,7 +7,6 @@
 #include <array>
 #include <atomic>
 #include <condition_variable>
-#include <deque>
 #include <iterator>
 #include <list>
 #include <memory>
@@ -17,6 +16,7 @@
 #include <utility>
 #include <vector>
 #include "common/common_types.h"
+#include "debugger/render_session.h"
 #include "video_core/pica/output_vertex.h"
 #include "video_core/pica/regs_rasterizer.h"
 #include "video_core/shader/debug_data.h"
@@ -142,49 +142,6 @@ public:
         u32 hit_count{};
     };
 
-    struct RenderTargetInfo {
-        u32 color_address{};
-        u32 depth_address{};
-        u32 width{};
-        u32 height{};
-        u32 color_format{};
-        u32 depth_format{};
-    };
-
-    enum class TimelineKind : u32 { Draw = 0, Frame = 1 };
-
-    enum class DrawMode : u32 { Arrays = 0, Indexed = 1, Immediate = 2 };
-
-    struct DrawInfo {
-        DrawMode mode{};
-        u32 vertex_count{};
-        u32 topology{};
-        u32 vertex_offset{};
-        u32 vertex_shader_entry{};
-    };
-
-    struct TimelineEntry {
-        u32 sequence{};
-        TimelineKind kind{};
-        u32 frame{};
-        u32 draw{};
-        u32 changed_mask{};
-        RenderTargetInfo target{};
-        DrawInfo draw_info{};
-    };
-
-    struct TimelinePosition {
-        u32 frame{};
-        u32 draw{};
-    };
-
-    struct TimelineStatus {
-        u32 count{};
-        u32 oldest_sequence{};
-        u32 newest_sequence{};
-        bool truncated{};
-    };
-
     /**
      * Static constructor used to create a shared_ptr of a DebugContext.
      */
@@ -224,7 +181,7 @@ public:
     void DoOnEvent(Event event, const void* data);
 
     /// Records an ordered draw call and emits the matching debugger event.
-    void OnDraw(const DrawInfo& info);
+    void OnDraw(const Debugger::DrawInfo& info);
 
     /**
      * Resume from the current breakpoint.
@@ -251,17 +208,13 @@ public:
     BreakPointCondition GetBreakpointCondition(Event event);
     void SetBreakpointOptions(Event event, bool one_shot, u32 skip_count);
     BreakPointOptions GetBreakpointOptions(Event event) const;
-    void SetRenderTargetInfo(RenderTargetInfo info);
-    RenderTargetInfo GetRenderTargetInfo() const;
-    std::vector<TimelineEntry> GetTimeline(u32 start, u32 count, TimelineKind kind,
-                                           bool filter_kind, u32 required_changes = 0,
-                                           u32 target_address = UINT32_MAX,
-                                           u32 shader_entry = UINT32_MAX,
-                                           u32 frame = UINT32_MAX) const;
-    TimelineStatus GetTimelineStatus() const;
-    TimelinePosition GetTimelinePosition() const;
-    void ClearTimeline();
-    void SetTimelineFrameLimit(u32 frame_limit);
+    void SetRenderTargetInfo(Debugger::RenderTarget info);
+    std::shared_ptr<Debugger::RenderSession> GetRenderSession() const {
+        return render_sessions->GetLive();
+    }
+    std::shared_ptr<Debugger::RenderSessionManager> GetRenderSessions() const {
+        return render_sessions;
+    }
 
     BreakPointState GetBreakpointState();
     std::optional<AttributeBuffer> GetVertexInput();
@@ -287,12 +240,11 @@ public:
 
 private:
     bool MatchesCondition(Event event, const void* data);
-    void RecordTimeline(TimelineKind kind, const DrawInfo& info);
     /**
      * Private default constructor to make sure people always construct this through Construct()
      * instead.
      */
-    DebugContext() = default;
+    DebugContext() : render_sessions{std::make_shared<Debugger::RenderSessionManager>()} {}
 
     /// Mutex protecting current breakpoint state.
     std::mutex breakpoint_mutex;
@@ -309,14 +261,7 @@ private:
     bool vertex_input_valid{};
     std::atomic_bool ignore_breakpoints_until_frame = false;
     std::array<BreakPointCondition, static_cast<int>(Event::NumEvents)> breakpoint_conditions{};
-    mutable std::mutex timeline_mutex;
-    RenderTargetInfo render_target{};
-    RenderTargetInfo previous_timeline_target{};
-    std::deque<TimelineEntry> timeline;
-    u32 timeline_sequence{};
-    u32 frame_index{};
-    u32 draw_index{};
-    std::atomic<u32> timeline_frame_limit{8};
+    std::shared_ptr<Debugger::RenderSessionManager> render_sessions;
 };
 
 extern std::shared_ptr<DebugContext> g_debug_context; // TODO: Get rid of this global

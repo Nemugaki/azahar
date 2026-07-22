@@ -30,6 +30,7 @@ enum class PacketType : u32 {
     PicaRenderTarget = 14,
     DebugState = 15,
     DebugCapture = 16,
+    RenderSession = 17,
 };
 
 enum class EmulationControl : u32 {
@@ -109,6 +110,14 @@ enum class DebugCaptureOperation : u32 {
     Delete = 5,
     Pin = 6,
     CacheStatus = 7,
+};
+
+enum class RenderSessionOperation : u32 {
+    List = 0,
+    Select = 1,
+    Remove = 2,
+    Import = 3,
+    Export = 4,
 };
 
 enum class Error : u32 {
@@ -228,6 +237,15 @@ struct PicaTimelineStatus {
     u32 truncated;
 };
 
+struct RenderSessionReply {
+    u64 id;
+    u64 capabilities;
+    u32 flags;
+    std::array<char, 20> producer;
+    std::array<char, 20> backend;
+};
+static_assert(sizeof(RenderSessionReply) == 0x40);
+
 struct PicaTraceReply {
     u32 active;
     u32 generation;
@@ -292,6 +310,7 @@ constexpr u32 CAPABILITY_DEBUG_STATE = 1U << 13;
 constexpr u32 CAPABILITY_DEBUG_CAPTURE = 1U << 14;
 constexpr u32 CAPABILITY_ERROR_REPLIES = 1U << 15;
 constexpr u32 CAPABILITY_REQUEST_DEDUPLICATION = 1U << 16;
+constexpr u32 CAPABILITY_RENDER_SESSIONS = 1U << 17;
 
 class Packet {
 public:
