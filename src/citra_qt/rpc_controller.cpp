@@ -116,6 +116,20 @@ Core::RPC::EmulationControlReply RPCController::Execute(Core::RPC::EmulationCont
             }
         }
         break;
+    case Core::RPC::EmulationControl::DebugPause:
+        if (State() == Core::RPC::EmulationState::Stopped || !main_window.emu_thread) {
+            reply.result = Core::RPC::EmulationResult::InvalidState;
+        } else {
+            main_window.emu_thread->SetRunning(false);
+        }
+        break;
+    case Core::RPC::EmulationControl::DebugResume:
+        if (!main_window.emu_thread || main_window.emu_thread->IsRunning()) {
+            reply.result = Core::RPC::EmulationResult::InvalidState;
+        } else {
+            main_window.emu_thread->SetRunning(true);
+        }
+        break;
     default:
         reply.result = Core::RPC::EmulationResult::Unsupported;
         break;

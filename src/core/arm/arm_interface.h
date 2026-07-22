@@ -69,6 +69,14 @@ public:
         }
     };
 
+    struct RegisterSnapshot {
+        std::array<u32, 16> core{};
+        std::array<u32, 32> vfp{};
+        u32 cpsr{};
+        u32 fpscr{};
+        u32 fpexc{};
+    };
+
     /// Runs the CPU until an event happens
     virtual void Run() = 0;
 
@@ -150,6 +158,20 @@ public:
      * @return Returns the value of the CPSR register
      */
     virtual u32 GetCPSR() const = 0;
+
+    RegisterSnapshot GetRegisterSnapshot() const {
+        RegisterSnapshot snapshot;
+        for (std::size_t i = 0; i < snapshot.core.size(); ++i) {
+            snapshot.core[i] = GetReg(static_cast<int>(i));
+        }
+        for (std::size_t i = 0; i < snapshot.vfp.size(); ++i) {
+            snapshot.vfp[i] = GetVFPReg(static_cast<int>(i));
+        }
+        snapshot.cpsr = GetCPSR();
+        snapshot.fpscr = GetVFPSystemReg(VFP_FPSCR);
+        snapshot.fpexc = GetVFPSystemReg(VFP_FPEXC);
+        return snapshot;
+    }
 
     /**
      * Set the current CPSR register

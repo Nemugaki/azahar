@@ -1607,8 +1607,7 @@ void GMainWindow::BootGame(const QString& filename) {
     connect(emu_thread.get(), &EmuThread::HideLoadingScreen, loading_screen,
             &LoadingScreen::OnLoadComplete);
 
-    // Update the GUI
-    registersWidget->OnDebugModeEntered();
+    // Register values become valid when the emulation thread enters debug mode.
     if (ui->action_Single_Window_Mode->isChecked()) {
         game_list->hide();
         game_list_placeholder->hide();

@@ -18,6 +18,7 @@
 #include "video_core/pica/regs_shader.h"
 #include "video_core/pica/shader_setup.h"
 #include "video_core/renderer_base.h"
+#include "video_core/shader/shader_interpreter.h"
 
 using nihstro::DVLBHeader;
 using nihstro::DVLEHeader;
@@ -37,6 +38,10 @@ void DebugContext::DoOnEvent(Event event, const void* data) {
 
         active_breakpoint = event;
         at_breakpoint = true;
+        vertex_input_valid = event == Event::VertexShaderInvocation && data;
+        if (vertex_input_valid) {
+            std::memcpy(std::addressof(vertex_input), data, sizeof(vertex_input));
+        }
 
         // Tell all observers that we hit a breakpoint
         for (auto& breakpoint_observer : breakpoint_observers) {
@@ -73,12 +78,41 @@ DebugContext::BreakPointState DebugContext::GetBreakpointState() {
     return {enabled_mask, active_breakpoint, at_breakpoint};
 }
 
+std::optional<AttributeBuffer> DebugContext::GetVertexInput() {
+    std::lock_guard lock{breakpoint_mutex};
+    if (!at_breakpoint || !vertex_input_valid) {
+        return std::nullopt;
+    }
+    return vertex_input;
+}
+
 std::shared_ptr<DebugContext> g_debug_context; // TODO: Get rid of this global
 
 namespace DebugUtils {
 
-void DumpShader(const std::string& filename, const ShaderRegs& config, const ShaderSetup& setup,
-                const RasterizerRegs::VSOutputAttributes* output_attributes) {
+VertexShaderSnapshot CaptureVertexShader(
+    const ShaderRegs& config, ShaderSetup& setup,
+    const RasterizerRegs::VSOutputAttributes* output_attributes, const AttributeBuffer& input) {
+    VertexShaderSnapshot snapshot;
+    const auto& program = setup.GetProgramCode();
+    const auto& swizzles = setup.GetSwizzleData();
+    snapshot.program.assign(program.begin(), program.end());
+    snapshot.swizzles.assign(swizzles.begin(), swizzles.end());
+    snapshot.binary = BuildShaderBinary(config, setup, output_attributes);
+    snapshot.entry_point = config.main_offset;
+    snapshot.input_count = config.max_input_attribute_index + 1;
+    for (u32 attribute = 0; attribute < snapshot.input_count; ++attribute) {
+        snapshot.input_mapping[attribute] = config.GetRegisterForAttribute(attribute);
+    }
+
+    Shader::InterpreterEngine engine;
+    engine.SetupBatch(setup, snapshot.entry_point);
+    snapshot.cycles = engine.ProduceDebugInfo(setup, input, config);
+    return snapshot;
+}
+
+std::vector<u8> BuildShaderBinary(const ShaderRegs& config, const ShaderSetup& setup,
+                                  const RasterizerRegs::VSOutputAttributes* output_attributes) {
     struct StuffToWrite {
         const u8* pointer;
         u32 size;
@@ -257,12 +291,19 @@ void DumpShader(const std::string& filename, const ShaderRegs& config, const Sha
         QueueForWriting(reinterpret_cast<const u8*>(&constant), sizeof(constant));
     }
 
-    // Write data to file
-    std::ofstream file(filename, std::ios_base::out | std::ios_base::binary);
-
+    std::vector<u8> result;
+    result.reserve(write_offset);
     for (const auto& chunk : writing_queue) {
-        file.write(reinterpret_cast<const char*>(chunk.pointer), chunk.size);
+        result.insert(result.end(), chunk.pointer, chunk.pointer + chunk.size);
     }
+    return result;
+}
+
+void DumpShader(const std::string& filename, const ShaderRegs& config, const ShaderSetup& setup,
+                const RasterizerRegs::VSOutputAttributes* output_attributes) {
+    const auto data = BuildShaderBinary(config, setup, output_attributes);
+    std::ofstream file(filename, std::ios_base::out | std::ios_base::binary);
+    file.write(reinterpret_cast<const char*>(data.data()), data.size());
 }
 
 static std::unique_ptr<PicaTrace> pica_trace;

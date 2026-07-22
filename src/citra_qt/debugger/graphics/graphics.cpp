@@ -23,7 +23,7 @@ QVariant GPUCommandStreamItemModel::data(const QModelIndex& index, int role) con
         return QVariant();
 
     int command_index = index.row();
-    const Service::GSP::Command& command = GetDebugger()->ReadGXCommandHistory(command_index);
+    const Service::GSP::Command command = GetDebugger()->ReadGXCommandHistory(command_index);
     if (role == Qt::DisplayRole) {
         std::map<Service::GSP::CommandId, const char*> command_names = {
             {Service::GSP::CommandId::RequestDma, "REQUEST_DMA"},

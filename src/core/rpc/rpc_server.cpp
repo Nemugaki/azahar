@@ -3,6 +3,7 @@
 // Refer to the license.txt file included.
 
 #include "common/logging/log.h"
+#include "core/arm/arm_interface.h"
 #include "core/core.h"
 #include "core/hle/kernel/process.h"
 #include "core/memory.h"
@@ -10,6 +11,7 @@
 #include "core/rpc/rpc_server.h"
 #include "video_core/debug_utils/debug_utils.h"
 #include "video_core/gpu.h"
+#include "video_core/gpu_debugger.h"
 #include "video_core/pica/pica_core.h"
 
 namespace Core::RPC {
@@ -142,7 +144,9 @@ void RPCServer::HandleSetGetProcess(Packet& packet, u32 operation, u32 process_i
 void RPCServer::HandleCapabilities(Packet& packet) {
     const std::array response{CURRENT_VERSION,
                               CAPABILITY_EMULATION_CONTROL | CAPABILITY_PICA_SNAPSHOT |
-                                  CAPABILITY_PICA_BREAKPOINT | CAPABILITY_PICA_TRACE};
+                                  CAPABILITY_PICA_BREAKPOINT | CAPABILITY_PICA_TRACE |
+                                  CAPABILITY_CPU_REGISTERS | CAPABILITY_GX_COMMAND_TRACE |
+                                  CAPABILITY_PICA_SHADER};
     std::memcpy(packet.GetPacketData().data(), response.data(), sizeof(response));
     packet.SetPacketDataSize(sizeof(response));
     packet.SendReply();
@@ -173,7 +177,7 @@ void RPCServer::HandlePicaBreakpoint(Packet& packet, PicaBreakpointOperation ope
 }
 
 void RPCServer::HandlePicaTrace(Packet& packet, PicaTraceOperation operation, u32 generation,
-                                u32 offset, u32 size) {
+                                u32 start, u32 count, u32 register_id) {
     if (operation == PicaTraceOperation::Start) {
         if (!Pica::DebugUtils::IsPicaTracing()) {
             Pica::DebugUtils::StartPicaTracing();
@@ -193,14 +197,38 @@ void RPCServer::HandlePicaTrace(Packet& packet, PicaTraceOperation operation, u3
             pica_trace_owned = false;
         }
     } else if (operation == PicaTraceOperation::Read) {
-        if (generation == pica_trace_generation && offset <= pica_trace_data.size()) {
-            const auto available = static_cast<u32>(pica_trace_data.size() - offset);
-            const auto read_size = std::min(size, available);
-            std::memcpy(packet.GetPacketData().data(), pica_trace_data.data() + offset, read_size);
+        if (generation == pica_trace_generation && start <= pica_trace_data.size()) {
+            const auto available = static_cast<u32>(pica_trace_data.size() - start);
+            const auto read_size = std::min(count, available);
+            std::memcpy(packet.GetPacketData().data(), pica_trace_data.data() + start, read_size);
             packet.SetPacketDataSize(read_size);
         } else {
             packet.SetPacketDataSize(0);
         }
+        packet.SendReply();
+        return;
+    } else if (operation == PicaTraceOperation::ReadWrites) {
+        using Write = Pica::DebugUtils::PicaTrace::Write;
+        const u32 total = static_cast<u32>(pica_trace_data.size() / sizeof(Write));
+        const u32 max_writes = (MAX_PACKET_DATA_SIZE - sizeof(u32)) / sizeof(Write);
+        std::vector<Write> result;
+        if (generation == pica_trace_generation) {
+            for (u32 i = std::min(start, total);
+                 i < total && result.size() < std::min(count, max_writes); ++i) {
+                Write write;
+                std::memcpy(&write, pica_trace_data.data() + i * sizeof(Write), sizeof(write));
+                if (register_id == UINT32_MAX || write.cmd_id == register_id) {
+                    result.push_back(write);
+                }
+            }
+        }
+        const u32 returned = static_cast<u32>(result.size());
+        std::memcpy(packet.GetPacketData().data(), &returned, sizeof(returned));
+        if (!result.empty()) {
+            std::memcpy(packet.GetPacketData().data() + sizeof(returned), result.data(),
+                        result.size() * sizeof(result.front()));
+        }
+        packet.SetPacketDataSize(sizeof(returned) + result.size() * sizeof(result.front()));
         packet.SendReply();
         return;
     } else if (operation == PicaTraceOperation::Clear) {
@@ -209,6 +237,202 @@ void RPCServer::HandlePicaTrace(Packet& packet, PicaTraceOperation operation, u3
 
     const PicaTraceReply reply{Pica::DebugUtils::IsPicaTracing(), pica_trace_generation,
                                static_cast<u32>(pica_trace_data.size())};
+    std::memcpy(packet.GetPacketData().data(), &reply, sizeof(reply));
+    packet.SetPacketDataSize(sizeof(reply));
+    packet.SendReply();
+}
+
+void RPCServer::HandleCPURegisters(Packet& packet, u32 bank, u32 start, u32 count) {
+    if (!system.IsPoweredOn() || !system.IsCPUHalted()) {
+        packet.SetPacketDataSize(0);
+        packet.SendReply();
+        return;
+    }
+
+    const auto snapshot = system.GetCore(0).GetRegisterSnapshot();
+    const u32 bank_size = bank == 0   ? snapshot.core.size()
+                          : bank == 1 ? snapshot.vfp.size()
+                          : bank == 2 ? 3
+                                      : 0;
+    const u32 first = std::min(start, bank_size);
+    const u32 end = first + std::min({count, static_cast<u32>(MAX_PACKET_DATA_SIZE / sizeof(u32)),
+                                      bank_size - first});
+    u32 written = 0;
+    for (u32 index = first; index < end; ++index) {
+        u32 value{};
+        if (bank == 0) {
+            value = snapshot.core[index];
+        } else if (bank == 1) {
+            value = snapshot.vfp[index];
+        } else if (index == 0) {
+            value = snapshot.cpsr;
+        } else {
+            value = index == 1 ? snapshot.fpscr : snapshot.fpexc;
+        }
+        std::memcpy(packet.GetPacketData().data() + written, &value, sizeof(value));
+        written += sizeof(value);
+    }
+    packet.SetPacketDataSize(written);
+    packet.SendReply();
+}
+
+void RPCServer::HandleGXCommandTrace(Packet& packet, GXCommandTraceOperation operation, u32 start,
+                                     u32 count, u32 command_id) {
+    if (!system.IsPoweredOn()) {
+        packet.SetPacketDataSize(0);
+        packet.SendReply();
+        return;
+    }
+    auto& debugger = system.GPU().Debugger();
+    if (operation == GXCommandTraceOperation::Start) {
+        debugger.StartCapture();
+    } else if (operation == GXCommandTraceOperation::Stop) {
+        debugger.StopCapture();
+    } else if (operation == GXCommandTraceOperation::Clear) {
+        debugger.ClearCapture();
+    } else if (operation == GXCommandTraceOperation::Read) {
+        constexpr u32 max_commands =
+            (MAX_PACKET_DATA_SIZE - sizeof(u32)) / sizeof(Service::GSP::Command);
+        const auto commands =
+            debugger.ReadGXCommands(start, std::min(count, max_commands), command_id);
+        const u32 returned = static_cast<u32>(commands.size());
+        std::memcpy(packet.GetPacketData().data(), &returned, sizeof(returned));
+        if (!commands.empty()) {
+            std::memcpy(packet.GetPacketData().data() + sizeof(returned), commands.data(),
+                        commands.size() * sizeof(commands.front()));
+        }
+        packet.SetPacketDataSize(sizeof(returned) + commands.size() * sizeof(commands.front()));
+        packet.SendReply();
+        return;
+    }
+    const std::array reply{static_cast<u32>(debugger.IsCapturing()), debugger.GetGXCommandCount()};
+    std::memcpy(packet.GetPacketData().data(), reply.data(), sizeof(reply));
+    packet.SetPacketDataSize(sizeof(reply));
+    packet.SendReply();
+}
+
+void RPCServer::HandlePicaShader(Packet& packet, PicaShaderOperation operation, u32 generation,
+                                 u32 start, u32 count, u32 instruction_offset) {
+    const auto context = Pica::g_debug_context;
+    if (!system.IsPoweredOn() || !context) {
+        packet.SetPacketDataSize(0);
+        packet.SendReply();
+        return;
+    }
+
+    if (operation == PicaShaderOperation::Prepare) {
+        if (!context->GetBreakpointState().at_breakpoint) {
+            packet.SetPacketDataSize(0);
+            packet.SendReply();
+            return;
+        }
+        auto& pica = system.GPU().PicaCore();
+        const auto vertex_input = context->GetVertexInput();
+        pica_shader_vertex_input_valid = vertex_input.has_value();
+        Pica::AttributeBuffer input{};
+        if (vertex_input) {
+            input = *vertex_input;
+        }
+        auto snapshot = Pica::DebugUtils::CaptureVertexShader(
+            pica.regs.internal.vs, pica.vs_setup,
+            pica.regs.internal.rasterizer.vs_output_attributes, input);
+        pica_shader_dump = std::move(snapshot.binary);
+        pica_shader_cycles.clear();
+        pica_shader_cycles.reserve(snapshot.cycles.records.size());
+        for (u32 cycle = 0; cycle < snapshot.cycles.records.size(); ++cycle) {
+            const auto& source = snapshot.cycles.records[cycle];
+            PicaShaderCycle target{cycle,
+                                   source.instruction_offset,
+                                   source.mask & Pica::Shader::DebugDataRecord::NEXT_INSTR
+                                       ? source.next_instruction
+                                       : UINT32_MAX,
+                                   source.mask,
+                                   {},
+                                   {},
+                                   0,
+                                   0};
+            const std::array vectors{source.src1, source.src2, source.src3, source.dest_in,
+                                     source.dest_out};
+            constexpr std::array vector_masks{
+                Pica::Shader::DebugDataRecord::SRC1, Pica::Shader::DebugDataRecord::SRC2,
+                Pica::Shader::DebugDataRecord::SRC3, Pica::Shader::DebugDataRecord::DEST_IN,
+                Pica::Shader::DebugDataRecord::DEST_OUT};
+            u32 output = 0;
+            for (u32 vector_index = 0; vector_index < vectors.size(); ++vector_index) {
+                for (u32 component = 0; component < 4; ++component) {
+                    if (source.mask & vector_masks[vector_index]) {
+                        const float value = vectors[vector_index][component].ToFloat32();
+                        std::memcpy(&target.vectors[output], &value, sizeof(value));
+                    }
+                    ++output;
+                }
+            }
+            if (source.mask & Pica::Shader::DebugDataRecord::ADDR_REG_OUT) {
+                target.address_registers = {source.address_registers[0],
+                                            source.address_registers[1]};
+            }
+            if (source.mask & Pica::Shader::DebugDataRecord::CMP_RESULT) {
+                target.condition_bits |= static_cast<u32>(source.conditional_code[0]) |
+                                         static_cast<u32>(source.conditional_code[1]) << 1;
+            }
+            if (source.mask & Pica::Shader::DebugDataRecord::COND_BOOL_IN) {
+                target.condition_bits |= static_cast<u32>(source.cond_bool) << 2;
+            }
+            if (source.mask & Pica::Shader::DebugDataRecord::COND_CMP_IN) {
+                target.condition_bits |= static_cast<u32>(source.cond_cmp[0]) << 3 |
+                                         static_cast<u32>(source.cond_cmp[1]) << 4;
+            }
+            if (source.mask & Pica::Shader::DebugDataRecord::LOOP_INT_IN) {
+                std::memcpy(&target.loop_int, std::addressof(source.loop_int),
+                            sizeof(target.loop_int));
+            }
+            pica_shader_cycles.push_back(target);
+        }
+        ++pica_shader_generation;
+    } else if (operation == PicaShaderOperation::ReadDump) {
+        if (generation == pica_shader_generation && start <= pica_shader_dump.size()) {
+            const u32 size = std::min(
+                {count, MAX_PACKET_DATA_SIZE, static_cast<u32>(pica_shader_dump.size() - start)});
+            if (size) {
+                std::memcpy(packet.GetPacketData().data(), pica_shader_dump.data() + start, size);
+            }
+            packet.SetPacketDataSize(size);
+        } else {
+            packet.SetPacketDataSize(0);
+        }
+        packet.SendReply();
+        return;
+    } else if (operation == PicaShaderOperation::ReadCycles) {
+        const u32 max_records = (MAX_PACKET_DATA_SIZE - sizeof(u32)) / sizeof(PicaShaderCycle);
+        std::vector<PicaShaderCycle> result;
+        if (generation == pica_shader_generation) {
+            for (u32 i = std::min(start, static_cast<u32>(pica_shader_cycles.size()));
+                 i < pica_shader_cycles.size() && result.size() < std::min(count, max_records);
+                 ++i) {
+                if (instruction_offset == UINT32_MAX ||
+                    pica_shader_cycles[i].instruction_offset == instruction_offset) {
+                    result.push_back(pica_shader_cycles[i]);
+                }
+            }
+        }
+        const u32 returned = static_cast<u32>(result.size());
+        std::memcpy(packet.GetPacketData().data(), &returned, sizeof(returned));
+        if (!result.empty()) {
+            std::memcpy(packet.GetPacketData().data() + sizeof(returned), result.data(),
+                        result.size() * sizeof(result.front()));
+        }
+        packet.SetPacketDataSize(sizeof(returned) + result.size() * sizeof(result.front()));
+        packet.SendReply();
+        return;
+    } else if (operation == PicaShaderOperation::Clear) {
+        pica_shader_dump.clear();
+        pica_shader_cycles.clear();
+        pica_shader_vertex_input_valid = false;
+    }
+
+    const PicaShaderStatus reply{pica_shader_generation, static_cast<u32>(pica_shader_dump.size()),
+                                 static_cast<u32>(pica_shader_cycles.size()),
+                                 pica_shader_vertex_input_valid};
     std::memcpy(packet.GetPacketData().data(), &reply, sizeof(reply));
     packet.SetPacketDataSize(sizeof(reply));
     packet.SendReply();
@@ -277,6 +501,9 @@ bool RPCServer::ValidatePacket(const PacketHeader& packet_header) {
         case PacketType::PicaSnapshot:
         case PacketType::PicaBreakpoint:
         case PacketType::PicaTrace:
+        case PacketType::CPURegisters:
+        case PacketType::GXCommandTrace:
+        case PacketType::PicaShader:
             return packet_header.packet_size >= sizeof(u32);
         default:
             break;
@@ -363,17 +590,62 @@ void RPCServer::HandleSingleRequest(std::unique_ptr<Packet> request_packet) {
         case PacketType::PicaTrace: {
             u32 arg3 = 0;
             u32 arg4 = 0;
+            u32 arg5 = UINT32_MAX;
             if (request_packet->GetPacketDataSize() >= 3 * sizeof(u32)) {
                 std::memcpy(&arg3, packet_data.data() + 2 * sizeof(u32), sizeof(arg3));
             }
             if (request_packet->GetPacketDataSize() >= 4 * sizeof(u32)) {
                 std::memcpy(&arg4, packet_data.data() + 3 * sizeof(u32), sizeof(arg4));
             }
+            if (request_packet->GetPacketDataSize() >= 5 * sizeof(u32)) {
+                std::memcpy(&arg5, packet_data.data() + 4 * sizeof(u32), sizeof(arg5));
+            }
             if (arg4 <= MAX_PACKET_DATA_SIZE) {
                 HandlePicaTrace(*request_packet, static_cast<PicaTraceOperation>(arg1), arg2, arg3,
-                                arg4);
+                                arg4, arg5);
                 success = true;
             }
+            break;
+        }
+        case PacketType::CPURegisters: {
+            u32 arg3 = 1;
+            if (request_packet->GetPacketDataSize() >= 3 * sizeof(u32)) {
+                std::memcpy(&arg3, packet_data.data() + 2 * sizeof(u32), sizeof(arg3));
+            }
+            HandleCPURegisters(*request_packet, arg1, arg2, arg3);
+            success = true;
+            break;
+        }
+        case PacketType::GXCommandTrace: {
+            u32 arg3 = 0;
+            u32 arg4 = UINT32_MAX;
+            if (request_packet->GetPacketDataSize() >= 3 * sizeof(u32)) {
+                std::memcpy(&arg3, packet_data.data() + 2 * sizeof(u32), sizeof(arg3));
+            }
+            if (request_packet->GetPacketDataSize() >= 4 * sizeof(u32)) {
+                std::memcpy(&arg4, packet_data.data() + 3 * sizeof(u32), sizeof(arg4));
+            }
+            HandleGXCommandTrace(*request_packet, static_cast<GXCommandTraceOperation>(arg1), arg2,
+                                 arg3, arg4);
+            success = true;
+            break;
+        }
+        case PacketType::PicaShader: {
+            u32 arg3 = 0;
+            u32 arg4 = 0;
+            u32 arg5 = UINT32_MAX;
+            if (request_packet->GetPacketDataSize() >= 3 * sizeof(u32)) {
+                std::memcpy(&arg3, packet_data.data() + 2 * sizeof(u32), sizeof(arg3));
+            }
+            if (request_packet->GetPacketDataSize() >= 4 * sizeof(u32)) {
+                std::memcpy(&arg4, packet_data.data() + 3 * sizeof(u32), sizeof(arg4));
+            }
+            if (request_packet->GetPacketDataSize() >= 5 * sizeof(u32)) {
+                std::memcpy(&arg5, packet_data.data() + 4 * sizeof(u32), sizeof(arg5));
+            }
+            HandlePicaShader(*request_packet, static_cast<PicaShaderOperation>(arg1), arg2, arg3,
+                             arg4, arg5);
+            success = true;
             break;
         }
         default:

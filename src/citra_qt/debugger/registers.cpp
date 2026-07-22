@@ -67,19 +67,19 @@ void RegistersWidget::OnDebugModeEntered() {
     }
 
     // TODO: Handle all cores
-    const auto& core = system.GetCore(0);
+    const auto snapshot = system.GetCore(0).GetRegisterSnapshot();
     for (int i = 0; i < core_registers->childCount(); ++i) {
         core_registers->child(i)->setText(
-            1, QStringLiteral("0x%1").arg(core.GetReg(i), 8, 16, QLatin1Char('0')));
+            1, QStringLiteral("0x%1").arg(snapshot.core[i], 8, 16, QLatin1Char('0')));
     }
 
     for (int i = 0; i < vfp_registers->childCount(); ++i) {
         vfp_registers->child(i)->setText(
-            1, QStringLiteral("0x%1").arg(core.GetVFPReg(i), 8, 16, QLatin1Char('0')));
+            1, QStringLiteral("0x%1").arg(snapshot.vfp[i], 8, 16, QLatin1Char('0')));
     }
 
-    UpdateCPSRValues();
-    UpdateVFPSystemRegisterValues();
+    UpdateCPSRValues(snapshot.cpsr);
+    UpdateVFPSystemRegisterValues(snapshot.fpscr, snapshot.fpexc);
 }
 
 void RegistersWidget::OnDebugModeLeft() {}
@@ -138,10 +138,7 @@ void RegistersWidget::CreateCPSRChildren() {
     cpsr->addChild(new QTreeWidgetItem(QStringList(QStringLiteral("N"))));
 }
 
-void RegistersWidget::UpdateCPSRValues() {
-    // TODO: Handle all cores
-    const u32 cpsr_val = system.GetCore(0).GetCPSR();
-
+void RegistersWidget::UpdateCPSRValues(u32 cpsr_val) {
     cpsr->setText(1, QStringLiteral("0x%1").arg(cpsr_val, 8, 16, QLatin1Char('0')));
     cpsr->child(0)->setText(
         1, QStringLiteral("b%1").arg(cpsr_val & 0x1F, 5, 2, QLatin1Char('0'))); // M - Mode
@@ -201,12 +198,7 @@ void RegistersWidget::CreateVFPSystemRegisterChildren() {
     vfp_system_registers->addChild(fpexc);
 }
 
-void RegistersWidget::UpdateVFPSystemRegisterValues() {
-    // TODO: handle all cores
-    const auto& core = system.GetCore(0);
-    const u32 fpscr_val = core.GetVFPSystemReg(VFP_FPSCR);
-    const u32 fpexc_val = core.GetVFPSystemReg(VFP_FPEXC);
-
+void RegistersWidget::UpdateVFPSystemRegisterValues(u32 fpscr_val, u32 fpexc_val) {
     QTreeWidgetItem* const fpscr = vfp_system_registers->child(0);
     fpscr->setText(1, QStringLiteral("0x%1").arg(fpscr_val, 8, 16, QLatin1Char('0')));
     fpscr->child(0)->setText(1, QString::number(fpscr_val & 1));

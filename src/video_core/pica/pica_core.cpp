@@ -690,7 +690,11 @@ void PicaCore::DrawArrays(bool is_indexed) {
         // this, so this is left unimplemented for now. Revisit this when an issue is found in
         // games.
 
-        bool accelerate_draw = Settings::values.use_hw_shader && primitive_assembler.IsEmpty();
+        const bool vertex_debugging =
+            debug_context &&
+            debug_context->IsBreakpointEnabled(DebugContext::Event::VertexShaderInvocation);
+        bool accelerate_draw =
+            Settings::values.use_hw_shader && !vertex_debugging && primitive_assembler.IsEmpty();
         const auto topology = primitive_assembler.GetTopology();
         if (topology == PipelineRegs::TriangleTopology::Shader ||
             topology == PipelineRegs::TriangleTopology::List) {

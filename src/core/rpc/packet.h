@@ -23,6 +23,9 @@ enum class PacketType : u32 {
     PicaSnapshot = 7,
     PicaBreakpoint = 8,
     PicaTrace = 9,
+    CPURegisters = 10,
+    GXCommandTrace = 11,
+    PicaShader = 12,
 };
 
 enum class EmulationControl : u32 {
@@ -32,6 +35,8 @@ enum class EmulationControl : u32 {
     Resume = 3,
     Stop = 4,
     Restart = 5,
+    DebugPause = 6,
+    DebugResume = 7,
 };
 
 enum class EmulationState : u32 {
@@ -60,7 +65,43 @@ enum class PicaTraceOperation : u32 {
     Stop = 2,
     Read = 3,
     Clear = 4,
+    ReadWrites = 5,
 };
+
+enum class GXCommandTraceOperation : u32 {
+    Status = 0,
+    Start = 1,
+    Stop = 2,
+    Read = 3,
+    Clear = 4,
+};
+
+enum class PicaShaderOperation : u32 {
+    Status = 0,
+    Prepare = 1,
+    ReadDump = 2,
+    ReadCycles = 3,
+    Clear = 4,
+};
+
+struct PicaShaderStatus {
+    u32 generation;
+    u32 dump_size;
+    u32 cycle_count;
+    u32 vertex_input_valid;
+};
+
+struct PicaShaderCycle {
+    u32 cycle;
+    u32 instruction_offset;
+    u32 next_instruction;
+    u32 mask;
+    std::array<u32, 20> vectors;
+    std::array<s32, 2> address_registers;
+    u32 condition_bits;
+    u32 loop_int;
+};
+static_assert(sizeof(PicaShaderCycle) == 0x70);
 
 struct PicaBreakpointReply {
     u32 enabled_mask;
@@ -116,6 +157,9 @@ constexpr u32 CAPABILITY_EMULATION_CONTROL = 1U << 0;
 constexpr u32 CAPABILITY_PICA_SNAPSHOT = 1U << 1;
 constexpr u32 CAPABILITY_PICA_BREAKPOINT = 1U << 2;
 constexpr u32 CAPABILITY_PICA_TRACE = 1U << 3;
+constexpr u32 CAPABILITY_CPU_REGISTERS = 1U << 4;
+constexpr u32 CAPABILITY_GX_COMMAND_TRACE = 1U << 5;
+constexpr u32 CAPABILITY_PICA_SHADER = 1U << 6;
 
 class Packet {
 public:

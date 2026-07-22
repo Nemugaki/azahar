@@ -5,7 +5,9 @@
 #pragma once
 
 #include <algorithm>
+#include <atomic>
 #include <functional>
+#include <mutex>
 #include <vector>
 #include "common/logging/log.h"
 #include "core/hle/service/gsp/gsp_command.h"
@@ -48,19 +50,59 @@ public:
     };
 
     void GXCommandProcessed(Service::GSP::Command& command_data) {
-        if (observers.empty()) {
+        if (observers.empty() && !capture_enabled) {
             return;
         }
 
-        gx_command_history.emplace_back(command_data);
+        {
+            std::lock_guard lock{history_mutex};
+            gx_command_history.emplace_back(command_data);
+        }
         ForEachObserver([this](DebuggerObserver* observer) {
-            observer->GXCommandProcessed(static_cast<int>(this->gx_command_history.size()));
+            observer->GXCommandProcessed(static_cast<int>(this->GetGXCommandCount()));
         });
     }
 
-    const Service::GSP::Command& ReadGXCommandHistory(int index) const {
-        // TODO: Is this thread-safe?
+    Service::GSP::Command ReadGXCommandHistory(int index) const {
+        std::lock_guard lock{history_mutex};
         return gx_command_history[index];
+    }
+
+    void StartCapture() {
+        std::lock_guard lock{history_mutex};
+        gx_command_history.clear();
+        capture_enabled = true;
+    }
+
+    void StopCapture() {
+        capture_enabled = false;
+    }
+
+    void ClearCapture() {
+        std::lock_guard lock{history_mutex};
+        gx_command_history.clear();
+    }
+
+    bool IsCapturing() const {
+        return capture_enabled;
+    }
+
+    u32 GetGXCommandCount() const {
+        std::lock_guard lock{history_mutex};
+        return static_cast<u32>(gx_command_history.size());
+    }
+
+    std::vector<Service::GSP::Command> ReadGXCommands(u32 start, u32 count, u32 command_id) const {
+        std::vector<Service::GSP::Command> result;
+        std::lock_guard lock{history_mutex};
+        for (u32 i = std::min(start, static_cast<u32>(gx_command_history.size()));
+             i < gx_command_history.size() && result.size() < count; ++i) {
+            if (command_id == UINT32_MAX ||
+                static_cast<u32>(gx_command_history[i].id.Value()) == command_id) {
+                result.push_back(gx_command_history[i]);
+            }
+        }
+        return result;
     }
 
     void RegisterObserver(DebuggerObserver* observer) {
@@ -80,7 +122,9 @@ private:
     }
 
     std::vector<DebuggerObserver*> observers;
+    mutable std::mutex history_mutex;
     std::vector<Service::GSP::Command> gx_command_history;
+    std::atomic_bool capture_enabled{};
 };
 
 } // namespace VideoCore

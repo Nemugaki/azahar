@@ -508,28 +508,24 @@ void GraphicsVertexShaderWidget::Reload(bool replace_vertex_data, const void* ve
     info.Clear();
 
     auto& pica = system.GPU().PicaCore();
-    const auto& program_code = pica.vs_setup.GetProgramCode();
-    const auto& swizzle_data = pica.vs_setup.GetSwizzleData();
-    for (auto instr : program_code)
+    auto snapshot = Pica::DebugUtils::CaptureVertexShader(
+        pica.regs.internal.vs, pica.vs_setup, pica.regs.internal.rasterizer.vs_output_attributes,
+        input_vertex);
+    for (auto instr : snapshot.program)
         info.code.push_back({instr});
-    int num_attributes = pica.regs.internal.vs.max_input_attribute_index + 1;
+    const int num_attributes = static_cast<int>(snapshot.input_count);
 
-    for (auto pattern : swizzle_data) {
+    for (auto pattern : snapshot.swizzles) {
         const nihstro::SwizzleInfo swizzle_info = {.pattern = nihstro::SwizzlePattern{pattern}};
         info.swizzle_info.push_back(swizzle_info);
     }
 
-    u32 entry_point = pica.regs.internal.vs.main_offset;
-    info.labels.insert({entry_point, "main"});
-
-    // Generate debug information
-    Pica::Shader::InterpreterEngine shader_engine;
-    shader_engine.SetupBatch(pica.vs_setup, entry_point);
-    debug_data = shader_engine.ProduceDebugInfo(pica.vs_setup, input_vertex, pica.regs.internal.vs);
+    info.labels.insert({snapshot.entry_point, "main"});
+    debug_data = std::move(snapshot.cycles);
 
     // Reload widget state
     for (int attr = 0; attr < num_attributes; ++attr) {
-        unsigned source_attr = pica.regs.internal.vs.GetRegisterForAttribute(attr);
+        const unsigned source_attr = snapshot.input_mapping[attr];
         input_data_mapping[attr]->setText(QStringLiteral("-> v%1").arg(source_attr));
         input_data_container[attr]->setVisible(true);
     }

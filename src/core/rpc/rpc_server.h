@@ -40,8 +40,13 @@ private:
                             u32 offset, u32 size);
     void HandlePicaBreakpoint(Packet& packet, PicaBreakpointOperation operation, u32 event,
                               u32 enabled);
-    void HandlePicaTrace(Packet& packet, PicaTraceOperation operation, u32 generation, u32 offset,
-                         u32 size);
+    void HandlePicaTrace(Packet& packet, PicaTraceOperation operation, u32 generation, u32 start,
+                         u32 count, u32 register_id);
+    void HandleCPURegisters(Packet& packet, u32 bank, u32 start, u32 count);
+    void HandleGXCommandTrace(Packet& packet, GXCommandTraceOperation operation, u32 start,
+                              u32 count, u32 command_id);
+    void HandlePicaShader(Packet& packet, PicaShaderOperation operation, u32 generation, u32 start,
+                          u32 count, u32 instruction_offset);
     bool ValidatePacket(const PacketHeader& packet_header);
     void HandleSingleRequest(std::unique_ptr<Packet> request);
     void HandleRequestsLoop(std::stop_token stop_token);
@@ -55,6 +60,10 @@ private:
     std::vector<u8> pica_trace_data;
     u32 pica_trace_generation = 0;
     bool pica_trace_owned = false;
+    std::vector<u8> pica_shader_dump;
+    std::vector<PicaShaderCycle> pica_shader_cycles;
+    u32 pica_shader_generation = 0;
+    bool pica_shader_vertex_input_valid = false;
 };
 
 } // namespace Core::RPC

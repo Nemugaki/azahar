@@ -22,6 +22,9 @@ class RequestType(enum.IntEnum):
     PicaSnapshot = 7,
     PicaBreakpoint = 8,
     PicaTrace = 9,
+    CPURegisters = 10,
+    GXCommandTrace = 11,
+    PicaShader = 12,
 
 class EmulationControl(enum.IntEnum):
     Status = 0
@@ -30,6 +33,8 @@ class EmulationControl(enum.IntEnum):
     Resume = 3
     Stop = 4
     Restart = 5
+    DebugPause = 6
+    DebugResume = 7
 
 class EmulationState(enum.IntEnum):
     Stopped = 0
@@ -98,6 +103,12 @@ class Citra:
 
     def restart(self):
         return self.emulation_control(EmulationControl.Restart)
+
+    def debug_pause(self):
+        return self.emulation_control(EmulationControl.DebugPause)
+
+    def debug_resume(self):
+        return self.emulation_control(EmulationControl.DebugResume)
 
     def pica_snapshot_status(self):
         reply = self._request(RequestType.PicaSnapshot, struct.pack("I", 1))
@@ -168,6 +179,65 @@ class Citra:
                 return None
             result.extend(chunk)
         return bytes(result)
+
+    def pica_trace_writes(self, generation, start=0, count=20, register_id=0xFFFFFFFF):
+        request = struct.pack("IIIII", 5, generation, start, count, register_id)
+        reply = self._request(RequestType.PicaTrace, request)
+        if reply is None or len(reply) < 4:
+            return None
+        returned = struct.unpack_from("I", reply)[0]
+        if len(reply) != 4 + returned * 8:
+            return None
+        return [struct.unpack_from("HHI", reply, 4 + index * 8) for index in range(returned)]
+
+    def cpu_registers(self, bank, start=0, count=1):
+        reply = self._request(RequestType.CPURegisters, struct.pack("III", bank, start, count))
+        if not reply or len(reply) % 4:
+            return None
+        return struct.unpack("I" * (len(reply) // 4), reply)
+
+    def gx_command_trace(self, operation=0, start=0, count=0, command_id=0xFFFFFFFF):
+        request = struct.pack("IIII", operation, start, count, command_id)
+        reply = self._request(RequestType.GXCommandTrace, request)
+        if reply is None:
+            return None
+        if operation != 3:
+            return struct.unpack("II", reply) if len(reply) == 8 else None
+        if len(reply) < 4:
+            return None
+        returned = struct.unpack_from("I", reply)[0]
+        if len(reply) != 4 + returned * 0x20:
+            return None
+        return [struct.unpack_from("8I", reply, 4 + index * 0x20)
+                for index in range(returned)]
+
+    def pica_shader_status(self, operation=0):
+        reply = self._request(RequestType.PicaShader, struct.pack("I", operation))
+        return struct.unpack("IIII", reply) if reply and len(reply) == 16 else None
+
+    def pica_shader_dump(self, generation, total_size):
+        result = bytearray()
+        while len(result) < total_size:
+            size = min(MAX_REQUEST_DATA_SIZE, total_size - len(result))
+            request = struct.pack("IIII", 2, generation, len(result), size)
+            chunk = self._request(RequestType.PicaShader, request)
+            if not chunk:
+                return None
+            result.extend(chunk)
+        return bytes(result)
+
+    def pica_shader_cycles(self, generation, start=0, count=8,
+                           instruction_offset=0xFFFFFFFF):
+        record_size = 0x70
+        request = struct.pack("IIIII", 3, generation, start, count, instruction_offset)
+        reply = self._request(RequestType.PicaShader, request)
+        if reply is None or len(reply) < 4:
+            return None
+        returned = struct.unpack_from("I", reply)[0]
+        if len(reply) != 4 + returned * record_size:
+            return None
+        return [struct.unpack_from("IIII20I2iII", reply, 4 + index * record_size)
+                for index in range(returned)]
 
     def process_list(self):
         processes = {}

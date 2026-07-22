@@ -11,11 +11,14 @@
 #include <list>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 #include "common/common_types.h"
+#include "video_core/pica/output_vertex.h"
 #include "video_core/pica/regs_rasterizer.h"
+#include "video_core/shader/debug_data.h"
 
 namespace CiTrace {
 class Recorder;
@@ -151,7 +154,12 @@ public:
         breakpoints[static_cast<int>(event)].enabled = enabled;
     }
 
+    bool IsBreakpointEnabled(Event event) const {
+        return breakpoints[static_cast<int>(event)].enabled;
+    }
+
     BreakPointState GetBreakpointState();
+    std::optional<AttributeBuffer> GetVertexInput();
 
     /**
      * Delete all set breakpoints and resume emulation.
@@ -185,14 +193,32 @@ private:
 
     /// List of registered observers
     std::list<BreakPointObserver*> breakpoint_observers;
+    AttributeBuffer vertex_input{};
+    bool vertex_input_valid{};
 };
 
 extern std::shared_ptr<DebugContext> g_debug_context; // TODO: Get rid of this global
 
 namespace DebugUtils {
 
+struct VertexShaderSnapshot {
+    std::vector<u32> program;
+    std::vector<u32> swizzles;
+    std::vector<u8> binary;
+    Shader::DebugData<true> cycles;
+    std::array<u32, 16> input_mapping{};
+    u32 entry_point{};
+    u32 input_count{};
+};
+
+VertexShaderSnapshot CaptureVertexShader(
+    const ShaderRegs& config, ShaderSetup& setup,
+    const RasterizerRegs::VSOutputAttributes* output_attributes, const AttributeBuffer& input);
+
 void DumpShader(const std::string& filename, const ShaderRegs& config, const ShaderSetup& setup,
                 const RasterizerRegs::VSOutputAttributes* output_attributes);
+std::vector<u8> BuildShaderBinary(const ShaderRegs& config, const ShaderSetup& setup,
+                                  const RasterizerRegs::VSOutputAttributes* output_attributes);
 
 // Utility class to log Pica commands.
 struct PicaTrace {

@@ -378,6 +378,14 @@ public:
     /// Applies any changes to settings to this core instance.
     void ApplySettings();
 
+    void SetCPUHalted(bool halted) {
+        cpu_halted = halted;
+    }
+
+    bool IsCPUHalted() const {
+        return cpu_halted;
+    }
+
 #ifdef ENABLE_SCRIPTING
     void StartRPCServer(RPC::EmulationControlHandler emulation_control_handler);
     void StopRPCServer();
@@ -509,6 +517,7 @@ private:
     static System s_instance;
 
     std::atomic_bool is_powered_on{};
+    std::atomic_bool cpu_halted{};
 
     SaveStateStatus save_state_status = SaveStateStatus::NONE;
     SaveStateStatus save_state_request_status = SaveStateStatus::NONE;

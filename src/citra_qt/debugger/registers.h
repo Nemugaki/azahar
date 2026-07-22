@@ -17,8 +17,9 @@ class ARMRegisters;
 }
 
 namespace Core {
+class ARM_Interface;
 class System;
-}
+} // namespace Core
 
 class RegistersWidget : public QDockWidget {
     Q_OBJECT
@@ -36,10 +37,10 @@ public slots:
 
 private:
     void CreateCPSRChildren();
-    void UpdateCPSRValues();
+    void UpdateCPSRValues(u32 value);
 
     void CreateVFPSystemRegisterChildren();
-    void UpdateVFPSystemRegisterValues();
+    void UpdateVFPSystemRegisterValues(u32 fpscr, u32 fpexc);
 
     std::unique_ptr<Ui::ARMRegisters> cpu_regs_ui;
     const Core::System& system;

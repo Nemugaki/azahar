@@ -106,8 +106,10 @@ void EmuThread::run() {
     bool was_active = false;
     while (!stop_run) {
         if (running) {
-            if (!was_active)
+            if (!was_active) {
+                system.SetCPUHalted(false);
                 emit DebugModeLeft();
+            }
 
             const Core::System::ResultStatus result = system.RunLoop();
             if (result == Core::System::ResultStatus::ShutdownRequested) {
@@ -122,23 +124,30 @@ void EmuThread::run() {
             }
 
             was_active = running || exec_step;
-            if (!was_active && !stop_run)
+            if (!was_active && !stop_run) {
+                system.SetCPUHalted(true);
                 emit DebugModeEntered();
+            }
         } else if (exec_step) {
-            if (!was_active)
+            if (!was_active) {
+                system.SetCPUHalted(false);
                 emit DebugModeLeft();
+            }
 
             exec_step = false;
             [[maybe_unused]] const Core::System::ResultStatus result = system.SingleStep();
+            system.SetCPUHalted(true);
             emit DebugModeEntered();
             yieldCurrentThread();
 
             was_active = false;
         } else {
+            system.SetCPUHalted(true);
             std::unique_lock lock{running_mutex};
             running_cv.wait(lock, [this] { return IsRunning() || exec_step || stop_run; });
         }
     }
+    system.SetCPUHalted(false);
 
     // Shutdown the core emulation
     system.Shutdown();
