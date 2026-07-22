@@ -188,12 +188,20 @@ void DebugContext::RecordTimeline(TimelineKind kind, const DrawInfo& info) {
 std::vector<DebugContext::TimelineEntry> DebugContext::GetTimeline(u32 start, u32 count,
                                                                    TimelineKind kind,
                                                                    bool filter_kind,
-                                                                   u32 required_changes) const {
+                                                                   u32 required_changes,
+                                                                   u32 target_address,
+                                                                   u32 shader_entry,
+                                                                   u32 frame) const {
     std::lock_guard lock{timeline_mutex};
     std::vector<TimelineEntry> result;
     const auto matches = [=](const TimelineEntry& entry) {
         return (!filter_kind || entry.kind == kind) &&
-               (entry.changed_mask & required_changes) == required_changes;
+               (entry.changed_mask & required_changes) == required_changes &&
+               (target_address == UINT32_MAX || entry.target.color_address == target_address ||
+                entry.target.depth_address == target_address) &&
+               (shader_entry == UINT32_MAX ||
+                entry.draw_info.vertex_shader_entry == shader_entry) &&
+               (frame == UINT32_MAX || entry.frame == frame);
     };
     if (start == UINT32_MAX) {
         for (auto entry = timeline.rbegin(); entry != timeline.rend() && result.size() < count;
@@ -205,18 +213,22 @@ std::vector<DebugContext::TimelineEntry> DebugContext::GetTimeline(u32 start, u3
         std::reverse(result.begin(), result.end());
         return result;
     }
-    const u32 first = std::min(start, static_cast<u32>(timeline.size()));
-    for (u32 i = first; i < timeline.size() && result.size() < count; ++i) {
-        if (matches(timeline[i])) {
-            result.push_back(timeline[i]);
+    for (const auto& entry : timeline) {
+        if (entry.sequence >= start && matches(entry)) {
+            result.push_back(entry);
+            if (result.size() == count) {
+                break;
+            }
         }
     }
     return result;
 }
 
-u32 DebugContext::GetTimelineCount() const {
+DebugContext::TimelineStatus DebugContext::GetTimelineStatus() const {
     std::lock_guard lock{timeline_mutex};
-    return static_cast<u32>(timeline.size());
+    return {static_cast<u32>(timeline.size()), timeline.empty() ? timeline_sequence : timeline.front().sequence,
+            timeline.empty() ? timeline_sequence : timeline.back().sequence,
+            !timeline.empty() && timeline.front().sequence != 0};
 }
 
 DebugContext::TimelinePosition DebugContext::GetTimelinePosition() const {

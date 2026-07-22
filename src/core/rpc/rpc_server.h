@@ -41,7 +41,8 @@ private:
     void HandlePicaBreakpoint(Packet& packet, PicaBreakpointOperation operation, u32 event,
                               u32 argument, u32 value, u32 mask);
     void HandlePicaTimeline(Packet& packet, PicaTimelineOperation operation, u32 start, u32 count,
-                            u32 kind, u32 required_changes);
+                            u32 kind, u32 required_changes, u32 target_address, u32 shader_entry,
+                            u32 frame);
     void HandlePicaRenderTarget(Packet& packet);
     void HandlePicaTrace(Packet& packet, PicaTraceOperation operation, u32 generation, u32 start,
                          u32 count, u32 register_id);

@@ -206,6 +206,13 @@ struct PicaTimelineEntry {
 };
 static_assert(sizeof(PicaTimelineEntry) == 0x40);
 
+struct PicaTimelineStatus {
+    u32 count;
+    u32 oldest_sequence;
+    u32 newest_sequence;
+    u32 truncated;
+};
+
 struct PicaTraceReply {
     u32 active;
     u32 generation;

@@ -321,7 +321,8 @@ void RPCServer::HandlePicaBreakpoint(Packet& packet, PicaBreakpointOperation ope
 }
 
 void RPCServer::HandlePicaTimeline(Packet& packet, PicaTimelineOperation operation, u32 start,
-                                   u32 count, u32 kind, u32 required_changes) {
+                                   u32 count, u32 kind, u32 required_changes, u32 target_address,
+                                   u32 shader_entry, u32 frame) {
     const auto context = Pica::g_debug_context;
     if (!context) {
         packet.SetPacketDataSize(0);
@@ -336,7 +337,7 @@ void RPCServer::HandlePicaTimeline(Packet& packet, PicaTimelineOperation operati
         const auto entries = context->GetTimeline(
             start, std::min(count, max_entries),
             static_cast<Pica::DebugContext::TimelineKind>(filter_kind ? kind : 0), filter_kind,
-            required_changes);
+            required_changes, target_address, shader_entry, frame);
         const u32 returned = static_cast<u32>(entries.size());
         std::memcpy(packet.GetPacketData().data(), &returned, sizeof(returned));
         for (u32 i = 0; i < returned; ++i) {
@@ -361,9 +362,11 @@ void RPCServer::HandlePicaTimeline(Packet& packet, PicaTimelineOperation operati
         packet.SendReply();
         return;
     }
-    const u32 total = context->GetTimelineCount();
-    std::memcpy(packet.GetPacketData().data(), &total, sizeof(total));
-    packet.SetPacketDataSize(sizeof(total));
+    const auto status = context->GetTimelineStatus();
+    const PicaTimelineStatus reply{status.count, status.oldest_sequence, status.newest_sequence,
+                                   status.truncated};
+    std::memcpy(packet.GetPacketData().data(), &reply, sizeof(reply));
+    packet.SetPacketDataSize(sizeof(reply));
     packet.SendReply();
 }
 
@@ -799,9 +802,10 @@ bool RPCServer::ValidatePacket(const PacketHeader& header) const {
     case PacketType::PicaBreakpoint:
     case PacketType::PicaTrace:
     case PacketType::PicaShader:
-    case PacketType::PicaTimeline:
     case PacketType::DebugCapture:
         return header.packet_size >= sizeof(u32) && header.packet_size <= 5 * sizeof(u32);
+    case PacketType::PicaTimeline:
+        return header.packet_size >= sizeof(u32) && header.packet_size <= 8 * sizeof(u32);
     case PacketType::CPURegisters:
         return header.packet_size == 3 * sizeof(u32) ||
                header.packet_size == 4 * sizeof(u32);
@@ -933,6 +937,9 @@ void RPCServer::HandleSingleRequest(std::unique_ptr<Packet> request_packet) {
             u32 arg3 = 20;
             u32 arg4 = UINT32_MAX;
             u32 arg5 = 0;
+            u32 arg6 = UINT32_MAX;
+            u32 arg7 = UINT32_MAX;
+            u32 arg8 = UINT32_MAX;
             if (request_packet->GetPacketDataSize() >= 3 * sizeof(u32)) {
                 std::memcpy(&arg3, packet_data.data() + 2 * sizeof(u32), sizeof(arg3));
             }
@@ -942,8 +949,17 @@ void RPCServer::HandleSingleRequest(std::unique_ptr<Packet> request_packet) {
             if (request_packet->GetPacketDataSize() >= 5 * sizeof(u32)) {
                 std::memcpy(&arg5, packet_data.data() + 4 * sizeof(u32), sizeof(arg5));
             }
+            if (request_packet->GetPacketDataSize() >= 6 * sizeof(u32)) {
+                std::memcpy(&arg6, packet_data.data() + 5 * sizeof(u32), sizeof(arg6));
+            }
+            if (request_packet->GetPacketDataSize() >= 7 * sizeof(u32)) {
+                std::memcpy(&arg7, packet_data.data() + 6 * sizeof(u32), sizeof(arg7));
+            }
+            if (request_packet->GetPacketDataSize() >= 8 * sizeof(u32)) {
+                std::memcpy(&arg8, packet_data.data() + 7 * sizeof(u32), sizeof(arg8));
+            }
             HandlePicaTimeline(*request_packet, static_cast<PicaTimelineOperation>(arg1), arg2,
-                               arg3, arg4, arg5);
+                               arg3, arg4, arg5, arg6, arg7, arg8);
             success = true;
             break;
         }

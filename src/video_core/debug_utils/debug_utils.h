@@ -169,6 +169,13 @@ public:
         u32 draw{};
     };
 
+    struct TimelineStatus {
+        u32 count{};
+        u32 oldest_sequence{};
+        u32 newest_sequence{};
+        bool truncated{};
+    };
+
     /**
      * Static constructor used to create a shared_ptr of a DebugContext.
      */
@@ -225,8 +232,11 @@ public:
     void SetRenderTargetInfo(RenderTargetInfo info);
     RenderTargetInfo GetRenderTargetInfo() const;
     std::vector<TimelineEntry> GetTimeline(u32 start, u32 count, TimelineKind kind,
-                                           bool filter_kind, u32 required_changes = 0) const;
-    u32 GetTimelineCount() const;
+                                           bool filter_kind, u32 required_changes = 0,
+                                           u32 target_address = UINT32_MAX,
+                                           u32 shader_entry = UINT32_MAX,
+                                           u32 frame = UINT32_MAX) const;
+    TimelineStatus GetTimelineStatus() const;
     TimelinePosition GetTimelinePosition() const;
     void ClearTimeline();
     void SetTimelineFrameLimit(u32 frame_limit);
