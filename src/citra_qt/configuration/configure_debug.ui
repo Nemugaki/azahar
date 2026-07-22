@@ -219,7 +219,7 @@
          <string>Allow render capture import/export to explicit host paths</string>
         </property>
         <property name="toolTip">
-         <string>Permits reading and writing versioned render-debugger capture files at paths supplied by RPC clients.</string>
+         <string>Permits reading and writing render-debugger capture files at paths supplied by RPC clients.</string>
         </property>
        </widget>
       </item>
