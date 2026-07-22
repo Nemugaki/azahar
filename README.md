@@ -31,7 +31,7 @@ The main features are:
   - Shared current color/depth render-target inspection in the surface viewer.
   - Per-core ARM register selection with unavailable-state reporting and previous-capture change highlighting.
   - Debugger tabs can dock on every edge, tab or nest together, float as non-modal windows, and remain in a static workspace while their content is enabled or disabled.
-- A Qt-free render-debugger library is shared by the emulator producer, Qt, and RPC. Its bounded live session and immutable imported sessions use a documented, versioned `.rdbg` interchange format; captures are render metadata, not emulator-state rewind or replay.
+- A Qt-free render-debugger library is shared by the emulator producer, Qt, and RPC. Its bounded live session and immutable imported sessions use a documented fixed `.rdbg` interchange format; captures are render metadata, not emulator-state rewind or replay.
 - Fixed an issue that CiTrace *apparently* had an issue since a GPU refactor from 2023.
 - CiTrace and command histories are bounded by the debugger cache limit; incomplete traces are identified instead of silently saved.
 

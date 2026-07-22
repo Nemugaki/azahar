@@ -75,6 +75,17 @@ class Citra:
         raw_reply = self.socket.recv(MAX_PACKET_SIZE)
         return self._read_and_validate_header(raw_reply, request_id, request_type)
 
+    def _read_chunks(self, request_type, operation, generation, total_size):
+        result = bytearray()
+        while len(result) < total_size:
+            size = min(MAX_REQUEST_DATA_SIZE, total_size - len(result))
+            request = struct.pack("IIII", operation, generation, len(result), size)
+            chunk = self._request(request_type, request)
+            if not chunk:
+                return None
+            result.extend(chunk)
+        return bytes(result)
+
     def capabilities(self):
         data = self._request(RequestType.Capabilities)
         if data is None or len(data) != 8:
@@ -138,15 +149,7 @@ class Citra:
             status = self.pica_snapshot_status()
             if status and status[0] != previous_generation:
                 generation, total_size = status
-                result = bytearray()
-                while len(result) < total_size:
-                    size = min(MAX_REQUEST_DATA_SIZE, total_size - len(result))
-                    request = struct.pack("IIII", 2, generation, len(result), size)
-                    chunk = self._request(RequestType.PicaSnapshot, request)
-                    if not chunk:
-                        return None
-                    result.extend(chunk)
-                return bytes(result)
+                return self._read_chunks(RequestType.PicaSnapshot, 2, generation, total_size)
             time.sleep(0.01)
         return None
 
@@ -182,15 +185,7 @@ class Citra:
         if reply is None or len(reply) != 12:
             return None
         _, generation, total_size = struct.unpack("III", reply)
-        result = bytearray()
-        while len(result) < total_size:
-            size = min(MAX_REQUEST_DATA_SIZE, total_size - len(result))
-            request = struct.pack("IIII", 3, generation, len(result), size)
-            chunk = self._request(RequestType.PicaTrace, request)
-            if not chunk:
-                return None
-            result.extend(chunk)
-        return bytes(result)
+        return self._read_chunks(RequestType.PicaTrace, 3, generation, total_size)
 
     def pica_trace_writes(self, generation, start=0, count=20, register_id=0xFFFFFFFF):
         request = struct.pack("IIIII", 5, generation, start, count, register_id)
@@ -228,15 +223,7 @@ class Citra:
         return struct.unpack("IIII", reply) if reply and len(reply) == 16 else None
 
     def pica_shader_dump(self, generation, total_size):
-        result = bytearray()
-        while len(result) < total_size:
-            size = min(MAX_REQUEST_DATA_SIZE, total_size - len(result))
-            request = struct.pack("IIII", 2, generation, len(result), size)
-            chunk = self._request(RequestType.PicaShader, request)
-            if not chunk:
-                return None
-            result.extend(chunk)
-        return bytes(result)
+        return self._read_chunks(RequestType.PicaShader, 2, generation, total_size)
 
     def pica_shader_cycles(self, generation, start=0, count=8,
                            instruction_offset=0xFFFFFFFF):

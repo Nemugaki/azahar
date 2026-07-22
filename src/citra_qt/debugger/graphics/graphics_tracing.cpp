@@ -506,7 +506,6 @@ void GraphicsTracingWidget::ImportCapture() {
     Debugger::Capture capture;
     Debugger::CaptureLimits limits;
     limits.total_bytes = static_cast<u64>(Settings::values.debugger_cache_mb.GetValue()) << 20;
-    limits.record_bytes = limits.total_bytes;
     std::string error;
     if (!Debugger::LoadCapture(filename.toStdString(), capture, error, limits)) {
         QMessageBox::critical(this, tr("Capture import failed"), QString::fromStdString(error));

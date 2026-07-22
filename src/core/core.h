@@ -632,7 +632,6 @@ private:
 
     struct DebugCaptureRecord {
         DebugCaptureHeader header;
-        std::vector<ARM_Interface::RegisterSnapshot> cores;
         std::vector<u8> data;
         bool pinned{};
     };

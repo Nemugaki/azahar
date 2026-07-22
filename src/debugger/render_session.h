@@ -19,10 +19,6 @@ using u64 = std::uint64_t;
 
 enum CaptureCapability : u64 {
     Timeline = 1ULL << 0,
-    RegisterWrites = 1ULL << 1,
-    Resources = 1ULL << 2,
-    Shaders = 1ULL << 3,
-    Previews = 1ULL << 4,
 };
 
 struct RenderTarget {
@@ -90,7 +86,6 @@ struct Capture {
 
 struct CaptureLimits {
     u64 total_bytes{1ULL << 30};
-    u64 record_bytes{256ULL << 20};
     std::size_t timeline_entries{1'000'000};
 };
 

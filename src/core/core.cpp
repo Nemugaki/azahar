@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <iterator>
 #include <stdexcept>
 #include <utility>
 #include <boost/serialization/array.hpp>
@@ -135,9 +136,10 @@ DebugCaptureInfo System::CreateDebugCapture() {
     capture.header.reason = before.reason;
     capture.header.detail = before.detail;
     capture.header.core_count = GetNumCores();
-    capture.cores.reserve(capture.header.core_count);
+    std::vector<ARM_Interface::RegisterSnapshot> cores;
+    cores.reserve(capture.header.core_count);
     for (u32 core = 0; core < capture.header.core_count; ++core) {
-        capture.cores.push_back(GetCore(core).GetRegisterSnapshot());
+        cores.push_back(GetCore(core).GetRegisterSnapshot());
     }
 
     auto& pica = GPU().PicaCore();
@@ -168,7 +170,7 @@ DebugCaptureInfo System::CreateDebugCapture() {
         capture.data.insert(capture.data.end(), bytes, bytes + size);
     };
     append(&capture.header, sizeof(capture.header));
-    append(capture.cores.data(), capture.cores.size() * sizeof(capture.cores.front()));
+    append(cores.data(), cores.size() * sizeof(cores.front()));
     append(pica_data.data(), pica_data.size());
 
     if (GetDebugState().generation != before.generation) {
@@ -180,9 +182,7 @@ DebugCaptureInfo System::CreateDebugCapture() {
         std::lock_guard lock{debug_mutex};
         const std::size_t limit =
             static_cast<std::size_t>(Settings::values.debugger_cache_mb.GetValue()) * 1024 * 1024;
-        const auto size_bytes = [](const DebugCaptureRecord& entry) {
-            return entry.data.size() + entry.cores.size() * sizeof(entry.cores.front());
-        };
+        const auto size_bytes = [](const DebugCaptureRecord& entry) { return entry.data.size(); };
         if (size_bytes(capture) > limit) {
             return {};
         }
@@ -264,7 +264,7 @@ DebugCaptureCacheInfo System::GetDebugCaptureCacheInfo() const {
     std::lock_guard lock{debug_mutex};
     std::size_t used{};
     for (const auto& capture : debug_captures) {
-        used += capture.data.size() + capture.cores.size() * sizeof(capture.cores.front());
+        used += capture.data.size();
     }
     return {static_cast<u32>(debug_captures.size()), static_cast<u32>(used),
             Settings::values.debugger_cache_mb.GetValue() * 1024 * 1024};
@@ -316,19 +316,22 @@ std::vector<DebugCaptureDiff> System::DiffDebugCaptures(u32 before_id, u32 after
 
 std::optional<ARM_Interface::RegisterSnapshot> System::GetDebugCaptureCore(u32 id, u32 core) const {
     std::lock_guard lock{debug_mutex};
-    if (!id && !debug_captures.empty()) {
-        const auto& capture = debug_captures.back();
-        return core < capture.cores.size()
-                   ? std::optional<ARM_Interface::RegisterSnapshot>{capture.cores[core]}
-                   : std::nullopt;
-    }
-    const auto capture = std::ranges::find_if(debug_captures, [id](const auto& entry) {
-        return entry.header.id == id;
-    });
-    if (capture == debug_captures.end() || core >= capture->cores.size()) {
+    const auto capture = !id && !debug_captures.empty()
+                             ? std::prev(debug_captures.end())
+                             : std::ranges::find_if(debug_captures, [id](const auto& entry) {
+                                   return entry.header.id == id;
+                               });
+    if (capture == debug_captures.end() || core >= capture->header.core_count) {
         return std::nullopt;
     }
-    return capture->cores[core];
+    const std::size_t offset = sizeof(DebugCaptureHeader) +
+                               core * sizeof(ARM_Interface::RegisterSnapshot);
+    ARM_Interface::RegisterSnapshot snapshot;
+    if (offset + sizeof(snapshot) > capture->data.size()) {
+        return std::nullopt;
+    }
+    std::memcpy(&snapshot, capture->data.data() + offset, sizeof(snapshot));
+    return snapshot;
 }
 
 #ifdef ENABLE_SCRIPTING

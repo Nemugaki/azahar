@@ -63,6 +63,7 @@ TEST_CASE("Render debugger capture round-trips and rejects malformed input", "[d
     };
     std::string error;
     REQUIRE(Debugger::SaveCapture(path.string(), source, error));
+    CHECK(std::filesystem::file_size(path) == 40 + 4 + 8 + 64);
 
     Debugger::Capture loaded;
     REQUIRE(Debugger::LoadCapture(path.string(), loaded, error));
@@ -72,6 +73,12 @@ TEST_CASE("Render debugger capture round-trips and rejects malformed input", "[d
     Debugger::RenderSession imported;
     REQUIRE(imported.Replace(loaded.timeline, loaded.truncated));
     CHECK(imported.GetPosition().draw == 3);
+
+    {
+        std::ofstream trailing(path, std::ios::binary | std::ios::app);
+        trailing.put('\0');
+    }
+    CHECK_FALSE(Debugger::LoadCapture(path.string(), loaded, error));
 
     {
         std::ofstream malformed(path, std::ios::binary | std::ios::trunc);

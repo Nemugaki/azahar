@@ -339,7 +339,6 @@ void RPCServer::HandleRenderSession(Packet& packet, RenderSessionOperation opera
         Debugger::Capture capture;
         Debugger::CaptureLimits limits;
         limits.total_bytes = static_cast<u64>(Settings::values.debugger_cache_mb.GetValue()) << 20;
-        limits.record_bytes = limits.total_bytes;
         std::string error;
         if (path.empty() || !Debugger::LoadCapture(path, capture, error, limits)) {
             SendError(packet, Error::InvalidArgument);
@@ -975,6 +974,15 @@ void RPCServer::SendError(Packet& packet, Error error) const {
 void RPCServer::HandleSingleRequest(std::unique_ptr<Packet> request_packet) {
     bool success = false;
     const auto packet_data = request_packet->GetPacketData();
+    const auto read_arg = [&](std::size_t index, u32 fallback = 0) {
+        const std::size_t offset = index * sizeof(u32);
+        if (request_packet->GetPacketDataSize() < offset + sizeof(u32)) {
+            return fallback;
+        }
+        u32 value;
+        std::memcpy(&value, packet_data.data() + offset, sizeof(value));
+        return value;
+    };
 
     if (!ValidatePacket(request_packet->GetHeader())) {
         SendError(*request_packet, Error::InvalidPacket);
@@ -987,14 +995,8 @@ void RPCServer::HandleSingleRequest(std::unique_ptr<Packet> request_packet) {
 
     {
         // Legacy request types use two arguments.
-        u32 arg1 = 0;
-        u32 arg2 = 0;
-        if (request_packet->GetPacketDataSize() >= sizeof(arg1)) {
-            std::memcpy(&arg1, packet_data.data(), sizeof(arg1));
-        }
-        if (request_packet->GetPacketDataSize() >= sizeof(arg1) + sizeof(arg2)) {
-            std::memcpy(&arg2, packet_data.data() + sizeof(arg1), sizeof(arg2));
-        }
+        const u32 arg1 = read_arg(0);
+        const u32 arg2 = read_arg(1);
 
         switch (request_packet->GetPacketType()) {
         case PacketType::ReadMemory:
@@ -1049,14 +1051,8 @@ void RPCServer::HandleSingleRequest(std::unique_ptr<Packet> request_packet) {
             break;
         }
         case PacketType::PicaSnapshot: {
-            u32 arg3 = 0;
-            u32 arg4 = 0;
-            if (request_packet->GetPacketDataSize() >= 3 * sizeof(u32)) {
-                std::memcpy(&arg3, packet_data.data() + 2 * sizeof(u32), sizeof(arg3));
-            }
-            if (request_packet->GetPacketDataSize() >= 4 * sizeof(u32)) {
-                std::memcpy(&arg4, packet_data.data() + 3 * sizeof(u32), sizeof(arg4));
-            }
+            const u32 arg3 = read_arg(2);
+            const u32 arg4 = read_arg(3);
             if (arg1 <= static_cast<u32>(PicaSnapshotOperation::Clear) &&
                 arg4 <= MAX_PACKET_DATA_SIZE) {
                 HandlePicaSnapshot(*request_packet, static_cast<PicaSnapshotOperation>(arg1), arg2,
@@ -1066,18 +1062,9 @@ void RPCServer::HandleSingleRequest(std::unique_ptr<Packet> request_packet) {
             break;
         }
         case PacketType::PicaBreakpoint: {
-            u32 arg3 = 0;
-            u32 arg4 = 0;
-            u32 arg5 = UINT32_MAX;
-            if (request_packet->GetPacketDataSize() >= 3 * sizeof(u32)) {
-                std::memcpy(&arg3, packet_data.data() + 2 * sizeof(u32), sizeof(arg3));
-            }
-            if (request_packet->GetPacketDataSize() >= 4 * sizeof(u32)) {
-                std::memcpy(&arg4, packet_data.data() + 3 * sizeof(u32), sizeof(arg4));
-            }
-            if (request_packet->GetPacketDataSize() >= 5 * sizeof(u32)) {
-                std::memcpy(&arg5, packet_data.data() + 4 * sizeof(u32), sizeof(arg5));
-            }
+            const u32 arg3 = read_arg(2);
+            const u32 arg4 = read_arg(3);
+            const u32 arg5 = read_arg(4, UINT32_MAX);
             if (arg1 <= static_cast<u32>(PicaBreakpointOperation::GetOptions)) {
                 HandlePicaBreakpoint(*request_packet,
                                      static_cast<PicaBreakpointOperation>(arg1), arg2, arg3, arg4,
@@ -1087,30 +1074,12 @@ void RPCServer::HandleSingleRequest(std::unique_ptr<Packet> request_packet) {
             break;
         }
         case PacketType::PicaTimeline: {
-            u32 arg3 = 20;
-            u32 arg4 = UINT32_MAX;
-            u32 arg5 = 0;
-            u32 arg6 = UINT32_MAX;
-            u32 arg7 = UINT32_MAX;
-            u32 arg8 = UINT32_MAX;
-            if (request_packet->GetPacketDataSize() >= 3 * sizeof(u32)) {
-                std::memcpy(&arg3, packet_data.data() + 2 * sizeof(u32), sizeof(arg3));
-            }
-            if (request_packet->GetPacketDataSize() >= 4 * sizeof(u32)) {
-                std::memcpy(&arg4, packet_data.data() + 3 * sizeof(u32), sizeof(arg4));
-            }
-            if (request_packet->GetPacketDataSize() >= 5 * sizeof(u32)) {
-                std::memcpy(&arg5, packet_data.data() + 4 * sizeof(u32), sizeof(arg5));
-            }
-            if (request_packet->GetPacketDataSize() >= 6 * sizeof(u32)) {
-                std::memcpy(&arg6, packet_data.data() + 5 * sizeof(u32), sizeof(arg6));
-            }
-            if (request_packet->GetPacketDataSize() >= 7 * sizeof(u32)) {
-                std::memcpy(&arg7, packet_data.data() + 6 * sizeof(u32), sizeof(arg7));
-            }
-            if (request_packet->GetPacketDataSize() >= 8 * sizeof(u32)) {
-                std::memcpy(&arg8, packet_data.data() + 7 * sizeof(u32), sizeof(arg8));
-            }
+            const u32 arg3 = read_arg(2, 20);
+            const u32 arg4 = read_arg(3, UINT32_MAX);
+            const u32 arg5 = read_arg(4);
+            const u32 arg6 = read_arg(5, UINT32_MAX);
+            const u32 arg7 = read_arg(6, UINT32_MAX);
+            const u32 arg8 = read_arg(7, UINT32_MAX);
             if (arg1 <= static_cast<u32>(PicaTimelineOperation::Status)) {
                 HandlePicaTimeline(*request_packet, static_cast<PicaTimelineOperation>(arg1), arg2,
                                    arg3, arg4, arg5, arg6, arg7, arg8);
@@ -1123,14 +1092,8 @@ void RPCServer::HandleSingleRequest(std::unique_ptr<Packet> request_packet) {
             success = true;
             break;
         case PacketType::DebugState: {
-            u32 arg3 = 0;
-            u32 arg4 = 0;
-            if (request_packet->GetPacketDataSize() >= 3 * sizeof(u32)) {
-                std::memcpy(&arg3, packet_data.data() + 2 * sizeof(u32), sizeof(arg3));
-            }
-            if (request_packet->GetPacketDataSize() >= 4 * sizeof(u32)) {
-                std::memcpy(&arg4, packet_data.data() + 3 * sizeof(u32), sizeof(arg4));
-            }
+            const u32 arg3 = read_arg(2);
+            const u32 arg4 = read_arg(3);
             if (arg1 <= static_cast<u32>(DebugStateOperation::Wait)) {
                 HandleDebugState(*request_packet, static_cast<DebugStateOperation>(arg1), arg2,
                                  arg3, arg4);
@@ -1139,18 +1102,9 @@ void RPCServer::HandleSingleRequest(std::unique_ptr<Packet> request_packet) {
             break;
         }
         case PacketType::DebugCapture: {
-            u32 arg3 = 0;
-            u32 arg4 = 0;
-            u32 arg5 = 0;
-            if (request_packet->GetPacketDataSize() >= 3 * sizeof(u32)) {
-                std::memcpy(&arg3, packet_data.data() + 2 * sizeof(u32), sizeof(arg3));
-            }
-            if (request_packet->GetPacketDataSize() >= 4 * sizeof(u32)) {
-                std::memcpy(&arg4, packet_data.data() + 3 * sizeof(u32), sizeof(arg4));
-            }
-            if (request_packet->GetPacketDataSize() >= 5 * sizeof(u32)) {
-                std::memcpy(&arg5, packet_data.data() + 4 * sizeof(u32), sizeof(arg5));
-            }
+            const u32 arg3 = read_arg(2);
+            const u32 arg4 = read_arg(3);
+            const u32 arg5 = read_arg(4);
             if (arg1 <= static_cast<u32>(DebugCaptureOperation::CacheStatus)) {
                 HandleDebugCapture(*request_packet, static_cast<DebugCaptureOperation>(arg1), arg2,
                                    arg3, arg4, arg5);
@@ -1159,14 +1113,10 @@ void RPCServer::HandleSingleRequest(std::unique_ptr<Packet> request_packet) {
             break;
         }
         case PacketType::RenderSession: {
-            u32 id_low{};
-            u32 id_high{};
-            u32 start{};
-            u32 count{};
-            std::memcpy(&id_low, packet_data.data() + sizeof(u32), sizeof(u32));
-            std::memcpy(&id_high, packet_data.data() + 2 * sizeof(u32), sizeof(u32));
-            std::memcpy(&start, packet_data.data() + 3 * sizeof(u32), sizeof(u32));
-            std::memcpy(&count, packet_data.data() + 4 * sizeof(u32), sizeof(u32));
+            const u32 id_low = read_arg(1);
+            const u32 id_high = read_arg(2);
+            const u32 start = read_arg(3);
+            const u32 count = read_arg(4);
             const auto operation = static_cast<RenderSessionOperation>(arg1);
             if (arg1 <= static_cast<u32>(RenderSessionOperation::Export)) {
                 const auto path_size = request_packet->GetPacketDataSize() - 5 * sizeof(u32);
@@ -1180,18 +1130,9 @@ void RPCServer::HandleSingleRequest(std::unique_ptr<Packet> request_packet) {
             break;
         }
         case PacketType::PicaTrace: {
-            u32 arg3 = 0;
-            u32 arg4 = 0;
-            u32 arg5 = UINT32_MAX;
-            if (request_packet->GetPacketDataSize() >= 3 * sizeof(u32)) {
-                std::memcpy(&arg3, packet_data.data() + 2 * sizeof(u32), sizeof(arg3));
-            }
-            if (request_packet->GetPacketDataSize() >= 4 * sizeof(u32)) {
-                std::memcpy(&arg4, packet_data.data() + 3 * sizeof(u32), sizeof(arg4));
-            }
-            if (request_packet->GetPacketDataSize() >= 5 * sizeof(u32)) {
-                std::memcpy(&arg5, packet_data.data() + 4 * sizeof(u32), sizeof(arg5));
-            }
+            const u32 arg3 = read_arg(2);
+            const u32 arg4 = read_arg(3);
+            const u32 arg5 = read_arg(4, UINT32_MAX);
             if (arg1 <= static_cast<u32>(PicaTraceOperation::ReadWrites) &&
                 arg4 <= MAX_PACKET_DATA_SIZE) {
                 HandlePicaTrace(*request_packet, static_cast<PicaTraceOperation>(arg1), arg2, arg3,
@@ -1201,14 +1142,9 @@ void RPCServer::HandleSingleRequest(std::unique_ptr<Packet> request_packet) {
             break;
         }
         case PacketType::CPURegisters: {
-            u32 arg3 = 1;
-            u32 arg4 = 0;
-            if (request_packet->GetPacketDataSize() >= 3 * sizeof(u32)) {
-                std::memcpy(&arg3, packet_data.data() + 2 * sizeof(u32), sizeof(arg3));
-            }
+            const u32 arg3 = read_arg(2, 1);
             if (request_packet->GetPacketDataSize() >= 4 * sizeof(u32)) {
-                std::memcpy(&arg4, packet_data.data() + 3 * sizeof(u32), sizeof(arg4));
-                HandleCPURegisters(*request_packet, arg1, arg2, arg3, arg4);
+                HandleCPURegisters(*request_packet, arg1, arg2, arg3, read_arg(3));
             } else {
                 HandleCPURegisters(*request_packet, 0, arg1, arg2, arg3);
             }
@@ -1216,14 +1152,8 @@ void RPCServer::HandleSingleRequest(std::unique_ptr<Packet> request_packet) {
             break;
         }
         case PacketType::GXCommandTrace: {
-            u32 arg3 = 0;
-            u32 arg4 = UINT32_MAX;
-            if (request_packet->GetPacketDataSize() >= 3 * sizeof(u32)) {
-                std::memcpy(&arg3, packet_data.data() + 2 * sizeof(u32), sizeof(arg3));
-            }
-            if (request_packet->GetPacketDataSize() >= 4 * sizeof(u32)) {
-                std::memcpy(&arg4, packet_data.data() + 3 * sizeof(u32), sizeof(arg4));
-            }
+            const u32 arg3 = read_arg(2);
+            const u32 arg4 = read_arg(3, UINT32_MAX);
             if (arg1 <= static_cast<u32>(GXCommandTraceOperation::Clear)) {
                 HandleGXCommandTrace(*request_packet,
                                      static_cast<GXCommandTraceOperation>(arg1), arg2, arg3, arg4);
@@ -1232,18 +1162,9 @@ void RPCServer::HandleSingleRequest(std::unique_ptr<Packet> request_packet) {
             break;
         }
         case PacketType::PicaShader: {
-            u32 arg3 = 0;
-            u32 arg4 = 0;
-            u32 arg5 = UINT32_MAX;
-            if (request_packet->GetPacketDataSize() >= 3 * sizeof(u32)) {
-                std::memcpy(&arg3, packet_data.data() + 2 * sizeof(u32), sizeof(arg3));
-            }
-            if (request_packet->GetPacketDataSize() >= 4 * sizeof(u32)) {
-                std::memcpy(&arg4, packet_data.data() + 3 * sizeof(u32), sizeof(arg4));
-            }
-            if (request_packet->GetPacketDataSize() >= 5 * sizeof(u32)) {
-                std::memcpy(&arg5, packet_data.data() + 4 * sizeof(u32), sizeof(arg5));
-            }
+            const u32 arg3 = read_arg(2);
+            const u32 arg4 = read_arg(3);
+            const u32 arg5 = read_arg(4, UINT32_MAX);
             if (arg1 <= static_cast<u32>(PicaShaderOperation::Clear)) {
                 HandlePicaShader(*request_packet, static_cast<PicaShaderOperation>(arg1), arg2,
                                  arg3, arg4, arg5);
