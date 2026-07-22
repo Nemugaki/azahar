@@ -166,8 +166,13 @@ struct PicaTimelineEntry {
     u32 draw;
     u32 changed_mask;
     PicaRenderTargetReply target;
+    u32 draw_mode;
+    u32 vertex_count;
+    u32 topology;
+    u32 vertex_offset;
+    u32 vertex_shader_entry;
 };
-static_assert(sizeof(PicaTimelineEntry) == 0x2C);
+static_assert(sizeof(PicaTimelineEntry) == 0x40);
 
 struct PicaTraceReply {
     u32 active;

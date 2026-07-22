@@ -11,15 +11,19 @@ The main features are:
   - Exposes ARM registers, memory, Pica state and shaders, command traces, breakpoints, current render targets, and a bounded draw/frame timeline without requiring large state dumps.
   - Supports conditional Pica breakpoints by command, color/depth target, draw, or frame, including masked comparisons.
   - Exposes dedicated Pica breakpoint resume as well as normal and CPU-debug resume controls.
+  - Reports a unified pause reason and supports blocking waits, so scripts can synchronize with user, CPU, Pica, and frame-advance pauses without polling.
+  - Creates atomic, bounded ARM/Pica captures and compact byte-level diffs for comparing debugger states.
   - Supports savestate loading and saving by slot, plus screenshots to a chosen output path.
   - Reports connected client count and supports a configurable port for running multiple instances.
   - Gates memory, CPU, Pica, savestate, screenshot, and emulator-control access independently in the UI.
 - Qt debugger improvements use the same underlying state as RPC:
   - Breakpoint-aware frame advance from normal pauses, CPU-debug pauses, and Pica GPU breakpoints.
-  - Conditional Pica breakpoint editing and a draw/frame timeline with render-target state diffs.
+  - Structured conditional Pica breakpoint editing with field, value, mask, validation, and current-value helpers.
+  - A searchable, frame-grouped render timeline labels draw mode, topology, vertex counts, shader entry points, target changes, and links to color/depth inspection.
+  - Configurable capture memory and timeline frame limits evict the oldest debugger history before it can grow without bound.
   - Shared current color/depth render-target inspection in the surface viewer.
-  - Per-core ARM register selection.
-- Fixed an issue that CiTrace *apparently* had since a GPU refactor from 2023.
+  - Per-core ARM register selection with unavailable-state reporting and previous-capture change highlighting.
+- Fixed an issue that CiTrace *apparently* had an issue since a GPU refactor from 2023.
 
 
 

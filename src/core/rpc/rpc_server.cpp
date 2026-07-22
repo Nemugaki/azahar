@@ -314,7 +314,12 @@ void RPCServer::HandlePicaTimeline(Packet& packet, PicaTimelineOperation operati
                 source.draw,
                 source.changed_mask,
                 {source.target.color_address, source.target.depth_address, source.target.width,
-                 source.target.height, source.target.color_format, source.target.depth_format}};
+                 source.target.height, source.target.color_format, source.target.depth_format},
+                static_cast<u32>(source.draw_info.mode),
+                source.draw_info.vertex_count,
+                source.draw_info.topology,
+                source.draw_info.vertex_offset,
+                source.draw_info.vertex_shader_entry};
             std::memcpy(packet.GetPacketData().data() + sizeof(returned) + i * sizeof(target),
                         &target, sizeof(target));
         }
