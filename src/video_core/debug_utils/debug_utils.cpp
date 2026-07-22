@@ -27,6 +27,7 @@ using nihstro::DVLPHeader;
 namespace Pica {
 
 void DebugContext::DoOnEvent(Event event, const void* data) {
+    std::unique_lock observer_lock{observer_mutex};
     {
         std::unique_lock lock{breakpoint_mutex};
 
@@ -42,12 +43,15 @@ void DebugContext::DoOnEvent(Event event, const void* data) {
         if (vertex_input_valid) {
             std::memcpy(std::addressof(vertex_input), data, sizeof(vertex_input));
         }
+    }
 
-        // Tell all observers that we hit a breakpoint
-        for (auto& breakpoint_observer : breakpoint_observers) {
-            breakpoint_observer->OnPicaBreakPointHit(event, data);
-        }
+    for (auto& breakpoint_observer : breakpoint_observers) {
+        breakpoint_observer->OnPicaBreakPointHit(event, data);
+    }
+    observer_lock.unlock();
 
+    {
+        std::unique_lock lock{breakpoint_mutex};
         // Wait until another thread tells us to Resume()
         resume_from_breakpoint.wait(lock, [&] { return !at_breakpoint; });
     }
@@ -56,17 +60,22 @@ void DebugContext::DoOnEvent(Event event, const void* data) {
 void DebugContext::Resume() {
     {
         std::lock_guard lock{breakpoint_mutex};
-
-        // Tell all observers that we are about to resume
-        for (auto& breakpoint_observer : breakpoint_observers) {
-            breakpoint_observer->OnPicaResume();
-        }
-
-        // Resume the waiting thread (i.e. OnEvent())
         at_breakpoint = false;
     }
 
+    {
+        std::lock_guard lock{observer_mutex};
+        for (auto& breakpoint_observer : breakpoint_observers) {
+            breakpoint_observer->OnPicaResume();
+        }
+    }
+
     resume_from_breakpoint.notify_one();
+}
+
+void DebugContext::ResumeUntilFrame() {
+    ignore_breakpoints_until_frame = true;
+    Resume();
 }
 
 DebugContext::BreakPointState DebugContext::GetBreakpointState() {

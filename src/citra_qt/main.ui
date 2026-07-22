@@ -221,6 +221,7 @@
      <addaction name="action_Debug_Pause"/>
      <addaction name="action_Debug_Resume"/>
      <addaction name="action_Debug_Step"/>
+     <addaction name="action_Advance_Frame"/>
      <addaction name="separator"/>
      <addaction name="action_Debug_Unschedule_All"/>
      <addaction name="action_Debug_Schedule_All"/>

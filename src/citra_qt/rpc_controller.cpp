@@ -15,6 +15,7 @@
 #include "core/core.h"
 #include "core/savestate.h"
 #include "core/rpc/udp_server.h"
+#include "video_core/debug_utils/debug_utils.h"
 
 RPCController::RPCController(GMainWindow& main_window_, Core::System& system_)
     : main_window{main_window_}, system{system_}, indicator{new QLabel(&main_window)} {
@@ -77,7 +78,10 @@ Core::RPC::EmulationState RPCController::State() const {
     if (!main_window.emulation_running || !main_window.emu_thread) {
         return Core::RPC::EmulationState::Stopped;
     }
-    if (!main_window.emu_thread->IsRunning() || system.frame_limiter.IsFrameAdvancing()) {
+    const bool at_pica_breakpoint =
+        Pica::g_debug_context && Pica::g_debug_context->GetBreakpointState().at_breakpoint;
+    if (!main_window.emu_thread->IsRunning() || system.frame_limiter.IsFrameAdvancing() ||
+        at_pica_breakpoint) {
         return Core::RPC::EmulationState::Paused;
     }
     return Core::RPC::EmulationState::Running;
@@ -185,6 +189,11 @@ Core::RPC::EmulationControlReply RPCController::Execute(Core::RPC::EmulationCont
         }
         break;
     }
+    case Core::RPC::EmulationControl::FrameAdvance:
+        if (!main_window.AdvanceFrame()) {
+            reply.result = Core::RPC::EmulationResult::InvalidState;
+        }
+        break;
     default:
         reply.result = Core::RPC::EmulationResult::Unsupported;
         break;

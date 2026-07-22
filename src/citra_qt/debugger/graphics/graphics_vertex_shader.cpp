@@ -472,12 +472,11 @@ GraphicsVertexShaderWidget::GraphicsVertexShaderWidget(
 
 void GraphicsVertexShaderWidget::OnBreakPointHit(Pica::DebugContext::Event event,
                                                  const void* data) {
-    if (event == Pica::DebugContext::Event::VertexShaderInvocation) {
-        Reload(true, data);
-    } else {
-        // No vertex data is retrievable => invalidate currently stored vertex data
-        Reload(true, nullptr);
+    if (event != Pica::DebugContext::Event::VertexShaderInvocation) {
+        widget()->setEnabled(false);
+        return;
     }
+    Reload(true, data);
     widget()->setEnabled(true);
 }
 

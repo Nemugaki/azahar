@@ -40,6 +40,7 @@ enum class EmulationControl : u32 {
     SaveState = 8,
     LoadState = 9,
     Screenshot = 10,
+    FrameAdvance = 11,
 };
 
 enum class EmulationState : u32 {

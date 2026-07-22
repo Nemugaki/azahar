@@ -61,7 +61,7 @@ public:
         /// Constructs the object such that it observes events of the given DebugContext.
         BreakPointObserver(std::shared_ptr<DebugContext> debug_context)
             : context_weak(debug_context) {
-            std::unique_lock lock{debug_context->breakpoint_mutex};
+            std::unique_lock lock{debug_context->observer_mutex};
             debug_context->breakpoint_observers.push_back(this);
         }
 
@@ -70,7 +70,7 @@ public:
             if (context) {
                 bool last_observer;
                 {
-                    std::unique_lock lock(context->breakpoint_mutex);
+                    std::unique_lock lock(context->observer_mutex);
                     context->breakpoint_observers.remove(this);
                     last_observer = context->breakpoint_observers.empty();
                 }
@@ -135,7 +135,7 @@ public:
      */
     void OnEvent(Event event, const void* data) {
         // This check is left in the header to allow the compiler to inline it.
-        if (!breakpoints[(int)event].enabled)
+        if (ignore_breakpoints_until_frame || !breakpoints[(int)event].enabled)
             return;
         // For the rest of event handling, call a separate function.
         DoOnEvent(event, data);
@@ -149,6 +149,14 @@ public:
      * Calling from any other thread is safe.
      */
     void Resume();
+
+    /// Resume a GPU breakpoint without immediately stopping again before the next frame.
+    void ResumeUntilFrame();
+
+    /// Called by the GPU at the frame boundary to restore temporarily suppressed breakpoints.
+    void OnFrameBoundary() {
+        ignore_breakpoints_until_frame = false;
+    }
 
     void SetBreakpoint(Event event, bool enabled) {
         breakpoints[static_cast<int>(event)].enabled = enabled;
@@ -168,6 +176,7 @@ public:
         for (auto& bp : breakpoints) {
             bp.enabled = false;
         }
+        ignore_breakpoints_until_frame = false;
         Resume();
     }
 
@@ -185,8 +194,11 @@ private:
      */
     DebugContext() = default;
 
-    /// Mutex protecting current breakpoint state and the observer list.
+    /// Mutex protecting current breakpoint state.
     std::mutex breakpoint_mutex;
+
+    /// Kept separate so observer UI work does not hold the breakpoint state mutex.
+    std::mutex observer_mutex;
 
     /// Used by OnEvent to wait for resumption.
     std::condition_variable resume_from_breakpoint;
@@ -195,6 +207,7 @@ private:
     std::list<BreakPointObserver*> breakpoint_observers;
     AttributeBuffer vertex_input{};
     bool vertex_input_valid{};
+    std::atomic_bool ignore_breakpoints_until_frame = false;
 };
 
 extern std::shared_ptr<DebugContext> g_debug_context; // TODO: Get rid of this global

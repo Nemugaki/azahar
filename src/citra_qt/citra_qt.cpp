@@ -754,6 +754,12 @@ void GMainWindow::InitializeDebugWidgets() {
         addDockWidget(Qt::RightDockWidgetArea, graphicsBreakpointsWidget);
         graphicsBreakpointsWidget->hide();
         debug_menu->addAction(graphicsBreakpointsWidget->toggleViewAction());
+        connect(graphicsBreakpointsWidget, &GraphicsBreakPointsWidget::FrameAdvanceRequested, this,
+                [this] { AdvanceFrame(); });
+        connect(graphicsBreakpointsWidget, &GraphicsBreakPointsWidget::BreakPointHit, this,
+                [this] { UpdateMenuState(); }, Qt::QueuedConnection);
+        connect(graphicsBreakpointsWidget, &GraphicsBreakPointsWidget::Resumed, this,
+                [this] { UpdateMenuState(); }, Qt::QueuedConnection);
 
         graphicsVertexShaderWidget =
             new GraphicsVertexShaderWidget(system, Pica::g_debug_context, this);
@@ -1201,11 +1207,7 @@ void GMainWindow::ConnectMenuEvents() {
     connect_menu(ui->action_Save_Movie, &GMainWindow::OnSaveMovie);
     connect_menu(ui->action_Movie_Read_Only_Mode,
                  [this](bool checked) { movie.SetReadOnly(checked); });
-    connect_menu(ui->action_Advance_Frame, [this] {
-        if (emulation_running && system.frame_limiter.IsFrameAdvancing()) {
-            system.frame_limiter.AdvanceFrame();
-        }
-    });
+    connect_menu(ui->action_Advance_Frame, [this] { AdvanceFrame(); });
     connect_menu(ui->action_Capture_Screenshot, &GMainWindow::OnCaptureScreenshot);
     connect_menu(ui->action_Dump_Video, &GMainWindow::OnDumpVideo);
 
@@ -1246,8 +1248,10 @@ void GMainWindow::ConnectMenuEvents() {
 }
 
 void GMainWindow::UpdateMenuState() {
-    const bool is_paused =
-        !emu_thread || !emu_thread->IsRunning() || system.frame_limiter.IsFrameAdvancing();
+    const bool at_pica_breakpoint =
+        Pica::g_debug_context && Pica::g_debug_context->GetBreakpointState().at_breakpoint;
+    const bool is_paused = !emu_thread || !emu_thread->IsRunning() ||
+                           system.frame_limiter.IsFrameAdvancing() || at_pica_breakpoint;
 
     const std::array running_actions{
         ui->action_Stop,
@@ -2664,6 +2668,34 @@ void GMainWindow::OnPauseGame() {
 #ifdef __unix__
     Common::Linux::StopGamemode();
 #endif
+}
+
+bool GMainWindow::AdvanceFrame() {
+    if (!emulation_running || !emu_thread) {
+        return false;
+    }
+
+    const bool was_frame_paused = system.frame_limiter.IsFrameAdvancing();
+    const bool cpu_paused = !emu_thread->IsRunning();
+    const auto pica_state = Pica::g_debug_context
+                                ? Pica::g_debug_context->GetBreakpointState()
+                                : Pica::DebugContext::BreakPointState{};
+    if (!was_frame_paused && !cpu_paused && !pica_state.at_breakpoint) {
+        return false;
+    }
+
+    system.frame_limiter.SetFrameAdvancing(true);
+    if (pica_state.at_breakpoint) {
+        Pica::g_debug_context->ResumeUntilFrame();
+    }
+    if (cpu_paused) {
+        emu_thread->SetRunning(true);
+    }
+    if (was_frame_paused) {
+        system.frame_limiter.AdvanceFrame();
+    }
+    UpdateMenuState();
+    return true;
 }
 
 void GMainWindow::OnPauseContinueGame() {

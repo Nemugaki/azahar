@@ -148,6 +148,8 @@ GraphicsBreakPointsWidget::GraphicsBreakPointsWidget(
     status_text = new QLabel(tr("Emulation running"));
     resume_button = new QPushButton(tr("Resume"));
     resume_button->setEnabled(false);
+    frame_advance_button = new QPushButton(tr("Advance Frame"));
+    frame_advance_button->setEnabled(false);
 
     breakpoint_model = new BreakPointModel(debug_context, this);
     breakpoint_list = new QTreeView;
@@ -162,6 +164,8 @@ GraphicsBreakPointsWidget::GraphicsBreakPointsWidget(
 
     connect(resume_button, &QPushButton::clicked, this,
             &GraphicsBreakPointsWidget::OnResumeRequested);
+    connect(frame_advance_button, &QPushButton::clicked, this,
+            &GraphicsBreakPointsWidget::FrameAdvanceRequested);
 
     connect(this, &GraphicsBreakPointsWidget::BreakPointHit, this,
             &GraphicsBreakPointsWidget::OnBreakPointHit, Qt::BlockingQueuedConnection);
@@ -182,6 +186,7 @@ GraphicsBreakPointsWidget::GraphicsBreakPointsWidget(
     {
         auto sub_layout = new QHBoxLayout;
         sub_layout->addWidget(status_text);
+        sub_layout->addWidget(frame_advance_button);
         sub_layout->addWidget(resume_button);
         main_layout->addLayout(sub_layout);
     }
@@ -199,6 +204,7 @@ void GraphicsBreakPointsWidget::OnPicaBreakPointHit(Event event, const void* dat
 void GraphicsBreakPointsWidget::OnBreakPointHit(Pica::DebugContext::Event event, const void* data) {
     status_text->setText(tr("Emulation halted at breakpoint"));
     resume_button->setEnabled(true);
+    frame_advance_button->setEnabled(true);
 }
 
 void GraphicsBreakPointsWidget::OnPicaResume() {
@@ -209,6 +215,7 @@ void GraphicsBreakPointsWidget::OnPicaResume() {
 void GraphicsBreakPointsWidget::OnResumed() {
     status_text->setText(tr("Emulation running"));
     resume_button->setEnabled(false);
+    frame_advance_button->setEnabled(false);
 }
 
 void GraphicsBreakPointsWidget::OnResumeRequested() {

@@ -28,6 +28,7 @@ public:
 
 signals:
     void Resumed();
+    void FrameAdvanceRequested();
     void BreakPointHit(Pica::DebugContext::Event event, const void* data);
     void BreakPointsChanged(const QModelIndex& topLeft, const QModelIndex& bottomRight);
 
@@ -39,6 +40,7 @@ private:
 
     QLabel* status_text;
     QPushButton* resume_button;
+    QPushButton* frame_advance_button;
 
     BreakPointModel* breakpoint_model;
     QTreeView* breakpoint_list;

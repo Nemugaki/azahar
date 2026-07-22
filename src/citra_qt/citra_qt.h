@@ -239,6 +239,7 @@ private slots:
     void OnResumeGame(bool first_start);
     void OnRestartGame();
     void OnPauseGame();
+    bool AdvanceFrame();
     void OnPauseContinueGame();
     void OnStopGame();
     void OnSaveState();

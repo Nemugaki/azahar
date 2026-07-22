@@ -499,6 +499,10 @@ void GPU::VBlankCallback(std::uintptr_t user_data, s64 cycles_late) {
     impl->signal_interrupt(Service::GSP::InterruptId::PDC0, 0);
     impl->signal_interrupt(Service::GSP::InterruptId::PDC1, 0);
 
+    if (impl->debug_context) {
+        impl->debug_context->OnFrameBoundary();
+    }
+
     // Present renderered frame.
     impl->renderer->SwapBuffers();
 
