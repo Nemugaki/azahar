@@ -13,6 +13,7 @@
 #include "common/logging/backend.h"
 #include "common/settings.h"
 #include "core/core.h"
+#include "core/rpc/udp_server.h"
 #include "ui_configure_debug.h"
 #ifdef ENABLE_VULKAN
 #include "video_core/renderer_vulkan/vk_instance.h"
@@ -154,6 +155,10 @@ void ConfigureDebug::SetConfiguration() {
     ui->rpc_allow_pica_vertex_shader->setChecked(
         Settings::values.rpc_allow_pica_vertex_shader.GetValue());
     ui->debugger_cache_mb->setValue(Settings::values.debugger_cache_mb.GetValue());
+    ui->rpc_server_info->setText(
+        tr("Effective port for this process: %1. Available before and between games. Server and "
+           "port changes require restarting Azahar.")
+            .arg(Core::RPC::GetRPCPort()));
 #ifndef ENABLE_SCRIPTING
     ui->rpc_groupbox->setVisible(false);
 #endif // !ENABLE_SCRIPTING

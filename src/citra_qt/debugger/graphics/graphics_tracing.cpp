@@ -8,6 +8,7 @@
 #include <memory>
 #include <QBoxLayout>
 #include <QComboBox>
+#include <QCheckBox>
 #include <QFileDialog>
 #include <QHeaderView>
 #include <QLabel>
@@ -16,6 +17,7 @@
 #include <QPushButton>
 #include <QSpinBox>
 #include <QTreeWidget>
+#include <QTimer>
 #include <nihstro/float24.h>
 #include "citra_qt/debugger/graphics/graphics_surface.h"
 #include "citra_qt/debugger/graphics/graphics_tracing.h"
@@ -50,6 +52,10 @@ GraphicsTracingWidget::GraphicsTracingWidget(Core::System& system_,
     frame_limit->setToolTip(
         tr("Keeps metadata for this many recent frames, up to 4096 events. Oldest entries are "
            "evicted; render-target images are not copied."));
+    follow_live = new QCheckBox(tr("Follow Live"));
+    follow_live->setChecked(true);
+    freeze_timeline = new QCheckBox(tr("Freeze"));
+    freeze_timeline->setToolTip(tr("Stops automatic refresh without pausing emulation."));
     if (debug_context) {
         debug_context->SetTimelineFrameLimit(frame_limit->value());
     }
@@ -85,6 +91,14 @@ GraphicsTracingWidget::GraphicsTracingWidget(Core::System& system_,
     connect(stop_recording, &QPushButton::clicked, this, &GraphicsTracingWidget::StopRecording);
     connect(abort_recording, &QPushButton::clicked, this, &GraphicsTracingWidget::AbortRecording);
     connect(refresh_timeline, &QPushButton::clicked, this, &GraphicsTracingWidget::RefreshTimeline);
+    auto* refresh_timer = new QTimer(this);
+    refresh_timer->setInterval(500);
+    connect(refresh_timer, &QTimer::timeout, this, [this] {
+        if (follow_live->isChecked() && !freeze_timeline->isChecked()) {
+            RefreshTimeline();
+        }
+    });
+    refresh_timer->start();
     connect(timeline_filter, &QLineEdit::textChanged, this,
             &GraphicsTracingWidget::FilterTimeline);
     connect(frame_limit, qOverload<int>(&QSpinBox::valueChanged), this, [this](int value) {
@@ -129,11 +143,27 @@ GraphicsTracingWidget::GraphicsTracingWidget(Core::System& system_,
     limit_label->setBuddy(frame_limit);
     timeline_controls->addWidget(limit_label);
     timeline_controls->addWidget(frame_limit);
+    timeline_controls->addWidget(follow_live);
+    timeline_controls->addWidget(freeze_timeline);
     timeline_controls->addWidget(refresh_timeline);
     main_layout->addLayout(timeline_controls);
     main_layout->addWidget(timeline);
     main_layout->addWidget(timeline_details);
     auto* target_controls = new QHBoxLayout;
+    auto* previous_event = new QPushButton(tr("Previous Event"));
+    auto* next_event = new QPushButton(tr("Next Event"));
+    connect(previous_event, &QPushButton::clicked, this, [this] {
+        if (auto* item = timeline->itemAbove(timeline->currentItem())) {
+            timeline->setCurrentItem(item);
+        }
+    });
+    connect(next_event, &QPushButton::clicked, this, [this] {
+        if (auto* item = timeline->itemBelow(timeline->currentItem())) {
+            timeline->setCurrentItem(item);
+        }
+    });
+    target_controls->addWidget(previous_event);
+    target_controls->addWidget(next_event);
     target_controls->addWidget(open_color_target);
     target_controls->addWidget(open_depth_target);
     main_layout->addLayout(target_controls);
@@ -298,6 +328,13 @@ void GraphicsTracingWidget::RefreshTimeline() {
     }
     timeline->header()->setSectionResizeMode(0, QHeaderView::Stretch);
     FilterTimeline(timeline_filter->text());
+    if (follow_live->isChecked() && timeline->topLevelItemCount()) {
+        auto* frame = timeline->topLevelItem(timeline->topLevelItemCount() - 1);
+        if (frame->childCount()) {
+            timeline->setCurrentItem(frame->child(frame->childCount() - 1));
+            timeline->scrollToItem(timeline->currentItem());
+        }
+    }
 }
 
 void GraphicsTracingWidget::FilterTimeline(const QString& text) {

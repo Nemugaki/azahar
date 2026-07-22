@@ -3,6 +3,7 @@
 // Refer to the license.txt file included.
 
 #include <algorithm>
+#include <QApplication>
 #include <QComboBox>
 #include <QLabel>
 #include <QTreeWidgetItem>
@@ -109,7 +110,11 @@ void RegistersWidget::RefreshRegisters(bool capture) {
                                  : QString{});
         item->setToolTip(1, changed ? QObject::tr("Changed since the previous debugger capture")
                                     : QString{});
-        item->setBackground(1, changed ? QBrush(QColor(0xFF, 0xF2, 0x99)) : QBrush{});
+        item->setBackground(1, changed ? QApplication::palette().brush(QPalette::Highlight)
+                                       : QBrush{});
+        item->setForeground(1, changed
+                                   ? QApplication::palette().brush(QPalette::HighlightedText)
+                                   : QBrush{});
     };
     for (int i = 0; i < core_registers->childCount(); ++i) {
         core_registers->child(i)->setText(

@@ -233,8 +233,11 @@ void RPCController::UpdateIndicator() {
                                  : tr("RPC: Failed to listen at %1")
                                        .arg(Core::RPC::GetRPCPort()));
     indicator->setToolTip(
-        tr("RPC server on 127.0.0.1:%1 (loopback only)\n%2 clients active in the last 10 seconds\n%3 frontend requests handled")
-            .arg(Core::RPC::GetRPCPort())
-            .arg(active_client_count)
-            .arg(request_count));
+        listening
+            ? tr("RPC server on 127.0.0.1:%1 (loopback only)\n%2 clients active in the last 10 seconds\n%3 frontend requests handled")
+                  .arg(Core::RPC::GetRPCPort())
+                  .arg(active_client_count)
+                  .arg(request_count)
+            : tr("Could not bind the loopback RPC server to port %1. Another process may be using it.")
+                  .arg(Core::RPC::GetRPCPort()));
 }

@@ -544,8 +544,13 @@ void GraphicsVertexShaderWidget::Reload(bool replace_vertex_data, const void* ve
     }
 
     // Initialize debug info text for current cycle count
-    cycle_index->setMaximum(static_cast<int>(debug_data.records.size() - 1));
-    OnCycleIndexChanged(cycle_index->value());
+    cycle_index->setRange(0, std::max(0, static_cast<int>(debug_data.records.size()) - 1));
+    cycle_index->setEnabled(!debug_data.records.empty());
+    if (debug_data.records.empty()) {
+        instruction_description->setText(tr("No shader cycles were captured."));
+    } else {
+        OnCycleIndexChanged(cycle_index->value());
+    }
 
     model->endResetModel();
 }
@@ -562,6 +567,9 @@ void GraphicsVertexShaderWidget::OnInputAttributeChanged(int index) {
 }
 
 void GraphicsVertexShaderWidget::OnCycleIndexChanged(int index) {
+    if (index < 0 || index >= static_cast<int>(debug_data.records.size())) {
+        return;
+    }
     QString text;
     const QString true_string = QStringLiteral("true");
     const QString false_string = QStringLiteral("false");

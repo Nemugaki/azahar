@@ -14,6 +14,7 @@ class System;
 
 class EmuThread;
 class QLabel;
+class QCheckBox;
 class QLineEdit;
 class QPushButton;
 class QSpinBox;
@@ -54,6 +55,8 @@ private:
     QWidget* recording_controls;
     QLineEdit* timeline_filter;
     QSpinBox* frame_limit;
+    QCheckBox* follow_live;
+    QCheckBox* freeze_timeline;
     QTreeWidget* timeline;
     QLabel* timeline_details;
     QPushButton* open_color_target;

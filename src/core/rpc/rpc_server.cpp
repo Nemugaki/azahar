@@ -4,6 +4,7 @@
 
 #include "common/logging/log.h"
 #include "common/settings.h"
+#include "common/scm_rev.h"
 #include "core/arm/arm_interface.h"
 #include "core/core.h"
 #include "core/hle/kernel/process.h"
@@ -166,9 +167,14 @@ void RPCServer::HandleSetGetProcess(Packet& packet, u32 operation, u32 process_i
 }
 
 void RPCServer::HandleCapabilities(Packet& packet) {
-    const std::array response{CURRENT_VERSION, GetEnabledCapabilities()};
-    std::memcpy(packet.GetPacketData().data(), response.data(), sizeof(response));
-    packet.SetPacketDataSize(sizeof(response));
+    const u32 build_size = std::min(static_cast<u32>(std::strlen(Common::g_scm_rev)),
+                                    static_cast<u32>(MAX_PACKET_DATA_SIZE -
+                                                     sizeof(CapabilitiesReply)));
+    const CapabilitiesReply response{CURRENT_VERSION, GetEnabledCapabilities(),
+                                     MAX_PACKET_DATA_SIZE, build_size};
+    std::memcpy(packet.GetPacketData().data(), &response, sizeof(response));
+    std::memcpy(packet.GetPacketData().data() + sizeof(response), Common::g_scm_rev, build_size);
+    packet.SetPacketDataSize(sizeof(response) + build_size);
     packet.SendReply();
 }
 
@@ -565,6 +571,11 @@ void RPCServer::HandleDebugCapture(Packet& packet, DebugCaptureOperation operati
             SendError(packet, Error::NotFound);
             return;
         }
+        const DebugCaptureReply reply{id, 0, 0, 0, 0};
+        std::memcpy(packet.GetPacketData().data(), &reply, sizeof(reply));
+        packet.SetPacketDataSize(sizeof(reply));
+        packet.SendReply();
+        return;
     } else if (operation == DebugCaptureOperation::Pin) {
         if (!system.SetDebugCapturePinned(id, argument != 0)) {
             SendError(packet, Error::NotFound);
@@ -885,6 +896,9 @@ void RPCServer::HandleSingleRequest(std::unique_ptr<Packet> request_packet) {
             success = true;
             break;
         case PacketType::SetGetProcess:
+            if (arg1 > 1) {
+                break;
+            }
             HandleSetGetProcess(*request_packet, arg1, arg2);
             success = true;
             break;
@@ -923,7 +937,8 @@ void RPCServer::HandleSingleRequest(std::unique_ptr<Packet> request_packet) {
             if (request_packet->GetPacketDataSize() >= 4 * sizeof(u32)) {
                 std::memcpy(&arg4, packet_data.data() + 3 * sizeof(u32), sizeof(arg4));
             }
-            if (arg4 <= MAX_PACKET_DATA_SIZE) {
+            if (arg1 <= static_cast<u32>(PicaSnapshotOperation::Clear) &&
+                arg4 <= MAX_PACKET_DATA_SIZE) {
                 HandlePicaSnapshot(*request_packet, static_cast<PicaSnapshotOperation>(arg1), arg2,
                                    arg3, arg4);
                 success = true;
@@ -943,9 +958,12 @@ void RPCServer::HandleSingleRequest(std::unique_ptr<Packet> request_packet) {
             if (request_packet->GetPacketDataSize() >= 5 * sizeof(u32)) {
                 std::memcpy(&arg5, packet_data.data() + 4 * sizeof(u32), sizeof(arg5));
             }
-            HandlePicaBreakpoint(*request_packet, static_cast<PicaBreakpointOperation>(arg1), arg2,
-                                 arg3, arg4, arg5);
-            success = true;
+            if (arg1 <= static_cast<u32>(PicaBreakpointOperation::GetOptions)) {
+                HandlePicaBreakpoint(*request_packet,
+                                     static_cast<PicaBreakpointOperation>(arg1), arg2, arg3, arg4,
+                                     arg5);
+                success = true;
+            }
             break;
         }
         case PacketType::PicaTimeline: {
@@ -973,9 +991,11 @@ void RPCServer::HandleSingleRequest(std::unique_ptr<Packet> request_packet) {
             if (request_packet->GetPacketDataSize() >= 8 * sizeof(u32)) {
                 std::memcpy(&arg8, packet_data.data() + 7 * sizeof(u32), sizeof(arg8));
             }
-            HandlePicaTimeline(*request_packet, static_cast<PicaTimelineOperation>(arg1), arg2,
-                               arg3, arg4, arg5, arg6, arg7, arg8);
-            success = true;
+            if (arg1 <= static_cast<u32>(PicaTimelineOperation::Status)) {
+                HandlePicaTimeline(*request_packet, static_cast<PicaTimelineOperation>(arg1), arg2,
+                                   arg3, arg4, arg5, arg6, arg7, arg8);
+                success = true;
+            }
             break;
         }
         case PacketType::PicaRenderTarget:
@@ -991,9 +1011,11 @@ void RPCServer::HandleSingleRequest(std::unique_ptr<Packet> request_packet) {
             if (request_packet->GetPacketDataSize() >= 4 * sizeof(u32)) {
                 std::memcpy(&arg4, packet_data.data() + 3 * sizeof(u32), sizeof(arg4));
             }
-            HandleDebugState(*request_packet, static_cast<DebugStateOperation>(arg1), arg2, arg3,
-                             arg4);
-            success = true;
+            if (arg1 <= static_cast<u32>(DebugStateOperation::Wait)) {
+                HandleDebugState(*request_packet, static_cast<DebugStateOperation>(arg1), arg2,
+                                 arg3, arg4);
+                success = true;
+            }
             break;
         }
         case PacketType::DebugCapture: {
@@ -1009,9 +1031,11 @@ void RPCServer::HandleSingleRequest(std::unique_ptr<Packet> request_packet) {
             if (request_packet->GetPacketDataSize() >= 5 * sizeof(u32)) {
                 std::memcpy(&arg5, packet_data.data() + 4 * sizeof(u32), sizeof(arg5));
             }
-            HandleDebugCapture(*request_packet, static_cast<DebugCaptureOperation>(arg1), arg2,
-                               arg3, arg4, arg5);
-            success = true;
+            if (arg1 <= static_cast<u32>(DebugCaptureOperation::CacheStatus)) {
+                HandleDebugCapture(*request_packet, static_cast<DebugCaptureOperation>(arg1), arg2,
+                                   arg3, arg4, arg5);
+                success = true;
+            }
             break;
         }
         case PacketType::PicaTrace: {
@@ -1027,7 +1051,8 @@ void RPCServer::HandleSingleRequest(std::unique_ptr<Packet> request_packet) {
             if (request_packet->GetPacketDataSize() >= 5 * sizeof(u32)) {
                 std::memcpy(&arg5, packet_data.data() + 4 * sizeof(u32), sizeof(arg5));
             }
-            if (arg4 <= MAX_PACKET_DATA_SIZE) {
+            if (arg1 <= static_cast<u32>(PicaTraceOperation::ReadWrites) &&
+                arg4 <= MAX_PACKET_DATA_SIZE) {
                 HandlePicaTrace(*request_packet, static_cast<PicaTraceOperation>(arg1), arg2, arg3,
                                 arg4, arg5);
                 success = true;
@@ -1058,9 +1083,11 @@ void RPCServer::HandleSingleRequest(std::unique_ptr<Packet> request_packet) {
             if (request_packet->GetPacketDataSize() >= 4 * sizeof(u32)) {
                 std::memcpy(&arg4, packet_data.data() + 3 * sizeof(u32), sizeof(arg4));
             }
-            HandleGXCommandTrace(*request_packet, static_cast<GXCommandTraceOperation>(arg1), arg2,
-                                 arg3, arg4);
-            success = true;
+            if (arg1 <= static_cast<u32>(GXCommandTraceOperation::Clear)) {
+                HandleGXCommandTrace(*request_packet,
+                                     static_cast<GXCommandTraceOperation>(arg1), arg2, arg3, arg4);
+                success = true;
+            }
             break;
         }
         case PacketType::PicaShader: {
@@ -1076,9 +1103,11 @@ void RPCServer::HandleSingleRequest(std::unique_ptr<Packet> request_packet) {
             if (request_packet->GetPacketDataSize() >= 5 * sizeof(u32)) {
                 std::memcpy(&arg5, packet_data.data() + 4 * sizeof(u32), sizeof(arg5));
             }
-            HandlePicaShader(*request_packet, static_cast<PicaShaderOperation>(arg1), arg2, arg3,
-                             arg4, arg5);
-            success = true;
+            if (arg1 <= static_cast<u32>(PicaShaderOperation::Clear)) {
+                HandlePicaShader(*request_packet, static_cast<PicaShaderOperation>(arg1), arg2,
+                                 arg3, arg4, arg5);
+                success = true;
+            }
             break;
         }
         default:

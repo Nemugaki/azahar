@@ -127,6 +127,13 @@ struct ErrorReply {
     Error error;
 };
 
+struct CapabilitiesReply {
+    u32 protocol_version;
+    u32 capabilities;
+    u32 max_packet_data_size;
+    u32 build_id_size;
+};
+
 struct DebugStateReply {
     u32 reason;
     u32 detail;
