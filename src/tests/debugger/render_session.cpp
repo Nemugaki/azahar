@@ -45,6 +45,8 @@ TEST_CASE("Render debugger session retains and filters bounded metadata", "[debu
     };
     const auto imported_id = sessions.AddImported(std::move(external));
     REQUIRE(imported_id != 0);
+    CHECK(sessions.Get(imported_id));
+    CHECK_FALSE(sessions.Get(9999));
     CHECK(sessions.GetActiveId() == imported_id);
     CHECK(sessions.GetActive()->GetStatus().count == 1);
     Debugger::Capture snapshot;
@@ -82,6 +84,10 @@ TEST_CASE("Render debugger retains per-draw output while pruning old frames", "[
     CHECK_FALSE(session.GetDrawOutput(first_sequence));
     REQUIRE(session.GetDrawOutput(second_sequence));
     CHECK(session.GetDrawOutput(second_sequence)->bytes == second_pixels);
+    REQUIRE(session.GetDrawOutput(second_sequence, 1, 2));
+    CHECK(session.GetDrawOutput(second_sequence, 1, 2)->bytes ==
+          std::vector<Debugger::u8>{6, 7});
+    CHECK_FALSE(session.GetDrawOutput(second_sequence, 5, 1));
 }
 
 TEST_CASE("Disabled render debugger does not capture", "[debugger]") {

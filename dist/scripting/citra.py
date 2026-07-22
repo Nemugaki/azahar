@@ -30,6 +30,7 @@ class RequestType(enum.IntEnum):
     DebugState = 15,
     DebugCapture = 16,
     RenderSession = 17,
+    RenderOutput = 18,
 
 class EmulationControl(enum.IntEnum):
     Status = 0
@@ -221,6 +222,42 @@ class Citra:
 
     def export_render_capture(self, path, session_id=0):
         return self.render_session(4, session_id, path)
+
+    def render_output_status(self, sequence, session_id=0):
+        request = struct.pack("4I", 0, session_id & 0xFFFFFFFF,
+                              session_id >> 32, sequence)
+        reply = self._request(RequestType.RenderOutput, request)
+        if reply is None or len(reply) != 0x28:
+            return None
+        result_id, result_sequence, format_, address, width, height, stride, size = \
+            struct.unpack("<QIIQIIII", reply)
+        return {
+            "session_id": result_id,
+            "sequence": result_sequence,
+            "format": format_,
+            "address": address,
+            "width": width,
+            "height": height,
+            "stride": stride,
+            "size": size,
+        }
+
+    def render_output(self, sequence, session_id=0):
+        status = self.render_output_status(sequence, session_id)
+        if status is None:
+            return None
+        result = bytearray()
+        while len(result) < status["size"]:
+            size = min(MAX_REQUEST_DATA_SIZE, status["size"] - len(result))
+            request = struct.pack("6I", 1, status["session_id"] & 0xFFFFFFFF,
+                                  status["session_id"] >> 32, sequence,
+                                  len(result), size)
+            chunk = self._request(RequestType.RenderOutput, request)
+            if chunk is None or len(chunk) != size:
+                return None
+            result.extend(chunk)
+        status["bytes"] = bytes(result)
+        return status
 
     def pica_snapshot_status(self):
         reply = self._request(RequestType.PicaSnapshot, struct.pack("I", 1))

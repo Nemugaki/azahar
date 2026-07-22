@@ -57,6 +57,8 @@ private:
                             u32 start, u32 count);
     void HandleRenderSession(Packet& packet, RenderSessionOperation operation, u64 id, u32 start,
                              u32 count, const std::string& path);
+    void HandleRenderOutput(Packet& packet, RenderOutputOperation operation, u64 session_id,
+                            u32 sequence, u32 offset, u32 count);
     u32 GetEnabledCapabilities() const;
     bool IsPacketTypeEnabled(PacketType packet_type) const;
     bool IsEmulationControlEnabled(EmulationControl operation) const;

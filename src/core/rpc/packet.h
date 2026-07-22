@@ -31,6 +31,7 @@ enum class PacketType : u32 {
     DebugState = 15,
     DebugCapture = 16,
     RenderSession = 17,
+    RenderOutput = 18,
 };
 
 enum class EmulationControl : u32 {
@@ -119,6 +120,8 @@ enum class RenderSessionOperation : u32 {
     Import = 3,
     Export = 4,
 };
+
+enum class RenderOutputOperation : u32 { Status = 0, Read = 1 };
 
 enum class Error : u32 {
     InvalidPacket = 1,
@@ -246,6 +249,18 @@ struct RenderSessionReply {
 };
 static_assert(sizeof(RenderSessionReply) == 0x40);
 
+struct RenderOutputReply {
+    u64 session_id;
+    u32 sequence;
+    u32 format;
+    u64 address;
+    u32 width;
+    u32 height;
+    u32 stride;
+    u32 size;
+};
+static_assert(sizeof(RenderOutputReply) == 0x28);
+
 struct PicaTraceReply {
     u32 active;
     u32 generation;
@@ -310,6 +325,7 @@ constexpr u32 CAPABILITY_DEBUG_CAPTURE = 1U << 14;
 constexpr u32 CAPABILITY_ERROR_REPLIES = 1U << 15;
 constexpr u32 CAPABILITY_REQUEST_DEDUPLICATION = 1U << 16;
 constexpr u32 CAPABILITY_RENDER_SESSIONS = 1U << 17;
+constexpr u32 CAPABILITY_RENDER_OUTPUTS = 1U << 18;
 
 class Packet {
 public:

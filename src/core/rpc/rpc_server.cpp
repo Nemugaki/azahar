@@ -232,6 +232,10 @@ u32 RPCServer::GetEnabledCapabilities() const {
          Settings::values.rpc_allow_render_captures.GetValue())) {
         capabilities |= CAPABILITY_RENDER_SESSIONS;
     }
+    if (Settings::values.pica_debugging.GetValue() &&
+        Settings::values.rpc_allow_render_captures.GetValue()) {
+        capabilities |= CAPABILITY_RENDER_OUTPUTS;
+    }
     return capabilities;
 }
 
@@ -271,6 +275,8 @@ bool RPCServer::IsPacketTypeEnabled(PacketType packet_type) const {
         return capabilities & CAPABILITY_DEBUG_CAPTURE;
     case PacketType::RenderSession:
         return capabilities & CAPABILITY_RENDER_SESSIONS;
+    case PacketType::RenderOutput:
+        return capabilities & CAPABILITY_RENDER_OUTPUTS;
     default:
         return false;
     }
@@ -376,6 +382,52 @@ void RPCServer::HandleRenderSession(Packet& packet, RenderSessionOperation opera
     const auto reply = make_reply(*descriptor);
     std::memcpy(packet.GetPacketData().data(), &reply, sizeof(reply));
     packet.SetPacketDataSize(sizeof(reply));
+    packet.SendReply();
+}
+
+void RPCServer::HandleRenderOutput(Packet& packet, RenderOutputOperation operation, u64 session_id,
+                                   u32 sequence, u32 offset, u32 count) {
+    const auto context = Pica::g_debug_context;
+    if (!context) {
+        SendError(packet, Error::InvalidState);
+        return;
+    }
+    const auto sessions = context->GetRenderSessions();
+    if (!session_id) {
+        session_id = sessions->GetActiveId();
+    }
+    const auto session = sessions->Get(session_id);
+    if (!session) {
+        SendError(packet, Error::NotFound);
+        return;
+    }
+    if (operation == RenderOutputOperation::Status) {
+        const auto output = session->GetDrawOutput(sequence);
+        if (!output) {
+            SendError(packet, Error::NotFound);
+            return;
+        }
+        const RenderOutputReply reply{session_id,
+                                      sequence,
+                                      output->format,
+                                      output->address,
+                                      output->width,
+                                      output->height,
+                                      output->stride,
+                                      static_cast<u32>(output->bytes.size())};
+        std::memcpy(packet.GetPacketData().data(), &reply, sizeof(reply));
+        packet.SetPacketDataSize(sizeof(reply));
+        packet.SendReply();
+        return;
+    }
+    const auto output = session->GetDrawOutput(sequence, offset,
+                                               std::min(count, MAX_PACKET_DATA_SIZE));
+    if (!output) {
+        SendError(packet, Error::InvalidArgument);
+        return;
+    }
+    std::memcpy(packet.GetPacketData().data(), output->bytes.data(), output->bytes.size());
+    packet.SetPacketDataSize(static_cast<u32>(output->bytes.size()));
     packet.SendReply();
 }
 
@@ -957,6 +1009,9 @@ bool RPCServer::ValidatePacket(const PacketHeader& header) const {
         return header.packet_size == sizeof(u32);
     case PacketType::RenderSession:
         return header.packet_size >= 5 * sizeof(u32) && header.packet_size <= MAX_PACKET_DATA_SIZE;
+    case PacketType::RenderOutput:
+        return header.packet_size >= 4 * sizeof(u32) &&
+               header.packet_size <= 6 * sizeof(u32);
     default:
         return false;
     }
@@ -1122,6 +1177,22 @@ void RPCServer::HandleSingleRequest(std::unique_ptr<Packet> request_packet) {
                 HandleRenderSession(*request_packet, operation,
                                     static_cast<u64>(id_low) | static_cast<u64>(id_high) << 32,
                                     start, count, path);
+                success = true;
+            }
+            break;
+        }
+        case PacketType::RenderOutput: {
+            const auto operation = static_cast<RenderOutputOperation>(arg1);
+            const bool valid_size =
+                (operation == RenderOutputOperation::Status &&
+                 request_packet->GetPacketDataSize() == 4 * sizeof(u32)) ||
+                (operation == RenderOutputOperation::Read &&
+                 request_packet->GetPacketDataSize() == 6 * sizeof(u32));
+            if (valid_size) {
+                HandleRenderOutput(
+                    *request_packet, operation,
+                    static_cast<u64>(arg2) | static_cast<u64>(read_arg(2)) << 32,
+                    read_arg(3), read_arg(4), read_arg(5));
                 success = true;
             }
             break;

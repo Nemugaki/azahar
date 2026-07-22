@@ -191,6 +191,11 @@ GraphicsTracingWidget::GraphicsTracingWidget(Core::System& system_,
     connect(refresh_timer, &QTimer::timeout, this, [this] {
         if (render_sessions) {
             UpdateOutputCaptureState();
+            const auto active = render_sessions->GetActiveId();
+            if (session_selector->count() != static_cast<int>(render_sessions->List().size()) ||
+                session_selector->currentData().toULongLong() != active) {
+                RefreshSessions(active);
+            }
         }
         if (Debugger::IsDockActive(this) && follow_live->isChecked() &&
             !freeze_timeline->isChecked()) {
@@ -696,8 +701,10 @@ void GraphicsTracingWidget::UpdateOutput(Debugger::u32 sequence) {
     if (!resource) {
         output_preview->SetPixmap({});
         output_preview->setText(tr("Output was not captured for this draw."));
-        output_status->setText(tr("Output capture is available while the live debugger is enabled "
-                                  "and visible."));
+        output_status->setText(
+            render_sessions->GetActiveId() == Debugger::RenderSessionManager::LiveSessionId
+                ? tr("Output capture is available while the live debugger is enabled and visible.")
+                : tr("This imported capture does not contain output pixels for this draw."));
         return;
     }
     if (resource->bytes.empty()) {

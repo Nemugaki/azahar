@@ -404,7 +404,8 @@ std::optional<DrawDetails> RenderSession::GetDrawDetails(u32 sequence_value) con
                                              static_cast<u32>(draw->resources.size())}};
 }
 
-std::optional<Resource> RenderSession::GetDrawOutput(u32 sequence_value) const {
+std::optional<Resource> RenderSession::GetDrawOutput(u32 sequence_value, u64 offset,
+                                                     u64 count) const {
     std::lock_guard lock{mutex};
     const auto draw = std::ranges::find_if(draws, [sequence_value](const auto& value) {
         return value.timeline.sequence == sequence_value;
@@ -419,7 +420,16 @@ std::optional<Resource> RenderSession::GetDrawOutput(u32 sequence_value) const {
     }
     const auto resource = std::ranges::find_if(
         resources, [id = reference->resource_id](const auto& value) { return value.id == id; });
-    return resource == resources.end() ? std::nullopt : std::optional<Resource>{*resource};
+    if (resource == resources.end() || offset > resource->bytes.size()) {
+        return std::nullopt;
+    }
+    const auto size = static_cast<std::size_t>(
+        std::min<u64>(count, resource->bytes.size() - offset));
+    const auto begin = resource->bytes.begin() + static_cast<std::size_t>(offset);
+    Resource result{resource->id,     resource->role,   resource->address,
+                    resource->format, resource->width,  resource->height,
+                    resource->stride, {begin, begin + size}};
+    return result;
 }
 
 void RenderSession::PruneRichCapture() {
@@ -502,6 +512,13 @@ RenderSessionManager::RenderSessionManager() {
 std::shared_ptr<RenderSession> RenderSessionManager::GetLive() const {
     std::lock_guard lock{sessions_mutex};
     return sessions.front().session;
+}
+
+std::shared_ptr<RenderSession> RenderSessionManager::Get(u64 id) const {
+    std::lock_guard lock{sessions_mutex};
+    const auto found = std::ranges::find_if(
+        sessions, [id](const auto& stored) { return stored.descriptor.id == id; });
+    return found == sessions.end() ? nullptr : found->session;
 }
 
 std::shared_ptr<RenderSession> RenderSessionManager::GetActive() const {

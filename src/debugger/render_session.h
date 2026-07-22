@@ -207,7 +207,9 @@ public:
     void Snapshot(Capture& capture) const;
     CaptureStatus GetCaptureStatus() const;
     std::optional<DrawDetails> GetDrawDetails(u32 sequence) const;
-    std::optional<Resource> GetDrawOutput(u32 sequence) const;
+    std::optional<Resource> GetDrawOutput(
+        u32 sequence, u64 offset = 0,
+        u64 count = std::numeric_limits<u64>::max()) const;
 
 private:
     TimelineEntry Record(TimelineKind kind, const DrawInfo& info);
@@ -257,6 +259,7 @@ public:
 
     RenderSessionManager();
     std::shared_ptr<RenderSession> GetLive() const;
+    std::shared_ptr<RenderSession> Get(u64 id) const;
     std::shared_ptr<RenderSession> GetActive() const;
     u64 GetActiveId() const;
     std::vector<SessionDescriptor> List() const;
