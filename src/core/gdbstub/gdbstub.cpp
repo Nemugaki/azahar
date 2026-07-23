@@ -34,6 +34,7 @@
 #include <unistd.h>
 #endif
 
+#include "common/assert.h"
 #include "common/logging/log.h"
 #include "core/arm/arm_interface.h"
 #include "core/core.h"
@@ -91,6 +92,7 @@ constexpr u32 CPSR_REGISTER = 25;
 constexpr u32 D0_REGISTER = 26;
 constexpr u32 FPSCR_REGISTER = 42;
 constexpr u32 FPEXC_REGISTER = 43;
+constexpr u32 GDB_REGISTER_DATA_SIZE = 408;
 
 // For sample XML files see the GDB source /gdb/features
 // GDB also wants the l character at the start
@@ -699,6 +701,9 @@ static void HandleQuery() {
         }
 
         auto thread_list = current_process->GetThreadList();
+        if (thread_list.empty()) {
+            return SendReply("l");
+        }
         std::string val = "m";
         for (const auto& thread : thread_list) {
             val += fmt::format("{:x},", thread->GetThreadId());
@@ -877,6 +882,7 @@ static void HandleGetStopReason() {
         for (const auto& process : process_list) {
             if (process->codeset->program_id == program_id) {
                 current_process = process.get();
+                current_process_finished = false;
                 current_process->SetUnscheduleMode(Kernel::UnscheduleMode::GDB);
                 is_running = false;
                 if (SetThread(0)) {
@@ -895,6 +901,10 @@ static void HandleGetStopReason() {
 }
 
 static void BreakImpl(int signal) {
+    if (!current_process) {
+        return SendReply("W00");
+    }
+
     if (signal == SIGSEGV && !Core::GetCore(0).HasSingleInstructionBreakAccuracy()) {
         LOG_WARNING(Debug_GDBStub, "The current CPU backend does not support accurate watchpoints "
                                    "and memory exceptions. Disable CPU JIT for more accuracy.");
@@ -1024,28 +1034,24 @@ static void ReadRegisters() {
 
     u8* bufptr = buffer;
 
-    for (u32 reg = 0; reg <= PC_REGISTER; reg++) {
-        IntToGdbHex(bufptr + reg * 8, RegRead(reg, current_thread));
+    for (u32 reg = 0; reg <= PC_REGISTER; ++reg, bufptr += 8) {
+        IntToGdbHex(bufptr, RegRead(reg, current_thread));
     }
-
-    bufptr += 16 * 8;
 
     IntToGdbHex(bufptr, RegRead(CPSR_REGISTER, current_thread));
-
     bufptr += 8;
 
-    for (u32 reg = D0_REGISTER; reg < FPSCR_REGISTER; reg++) {
-        LongToGdbHex(bufptr + reg * 16, FpuRead(reg, current_thread));
+    for (u32 reg = D0_REGISTER; reg < FPSCR_REGISTER; ++reg, bufptr += 16) {
+        LongToGdbHex(bufptr, FpuRead(reg, current_thread));
     }
 
-    bufptr += 16 * 16;
-
     IntToGdbHex(bufptr, static_cast<u32>(FpuRead(FPSCR_REGISTER, current_thread)));
-
     bufptr += 8;
 
     IntToGdbHex(bufptr, static_cast<u32>(FpuRead(FPEXC_REGISTER, current_thread)));
+    bufptr += 8;
 
+    ASSERT(static_cast<u32>(bufptr - buffer) == GDB_REGISTER_DATA_SIZE);
     SendReply(reinterpret_cast<char*>(buffer));
 }
 
@@ -1106,26 +1112,20 @@ static void WriteRegisters() {
 
     if (command_buffer[0] != 'G')
         return SendReply("E01");
-
-    for (u32 i = 0, reg = 0; reg <= FPEXC_REGISTER; i++, reg++) {
-        if (reg <= PC_REGISTER) {
-            RegWrite(reg, GdbHexToInt(buffer_ptr + i * 8), current_thread);
-        } else if (reg == CPSR_REGISTER) {
-            RegWrite(reg, GdbHexToInt(buffer_ptr + i * 8), current_thread);
-        } else if (reg == CPSR_REGISTER - 1) {
-            // Dummy FPA register, ignore
-        } else if (reg < CPSR_REGISTER) {
-            // Dummy FPA registers, ignore
-            i += 2;
-        } else if (reg >= D0_REGISTER && reg < FPSCR_REGISTER) {
-            FpuWrite(reg, GdbHexToLong(buffer_ptr + i * 16), current_thread);
-            i++; // Skip padding
-        } else if (reg == FPSCR_REGISTER) {
-            FpuWrite(reg, GdbHexToInt(buffer_ptr + i * 8), current_thread);
-        } else if (reg == FPEXC_REGISTER) {
-            FpuWrite(reg, GdbHexToInt(buffer_ptr + i * 8), current_thread);
-        }
+    if (recv_command_length != GDB_REGISTER_DATA_SIZE + 1) {
+        return SendReply("E01");
     }
+
+    for (u32 reg = 0; reg <= PC_REGISTER; ++reg, buffer_ptr += 8) {
+        RegWrite(reg, GdbHexToInt(buffer_ptr), current_thread);
+    }
+    RegWrite(CPSR_REGISTER, GdbHexToInt(buffer_ptr), current_thread);
+    buffer_ptr += 8;
+    for (u32 reg = D0_REGISTER; reg < FPSCR_REGISTER; ++reg, buffer_ptr += 16) {
+        FpuWrite(reg, GdbHexToLong(buffer_ptr), current_thread);
+    }
+    FpuWrite(FPSCR_REGISTER, GdbHexToInt(buffer_ptr), current_thread);
+    FpuWrite(FPEXC_REGISTER, GdbHexToInt(buffer_ptr + 8), current_thread);
 
     UpdateCPUThreadContext();
 
@@ -1142,17 +1142,20 @@ static void ReadMemory() {
     static u8 reply[GDB_BUFFER_SIZE - 4];
 
     auto start_offset = command_buffer + 1;
-    auto addr_pos = std::find(start_offset, command_buffer + recv_command_length, ',');
+    const auto command_end = command_buffer + recv_command_length;
+    auto addr_pos = std::find(start_offset, command_end, ',');
+    if (addr_pos == start_offset || addr_pos == command_end || addr_pos + 1 == command_end) {
+        return SendReply("E01");
+    }
     VAddr addr = HexToInt(start_offset, static_cast<u32>(addr_pos - start_offset));
 
     start_offset = addr_pos + 1;
-    u32 len = HexToInt(start_offset,
-                       static_cast<u32>((command_buffer + recv_command_length) - start_offset));
+    u32 len = HexToInt(start_offset, static_cast<u32>(command_end - start_offset));
 
     LOG_DEBUG(Debug_GDBStub, "ReadMemory addr: {:08x} len: {:08x}", addr, len);
 
-    if (len * 2 > sizeof(reply)) {
-        SendReply("");
+    if (len > sizeof(reply) / 2) {
+        return SendReply("");
     }
 
     auto& memory = Core::System::GetInstance().Memory();
@@ -1180,12 +1183,23 @@ static void WriteMemory() {
     }
 
     auto start_offset = command_buffer + 1;
-    auto addr_pos = std::find(start_offset, command_buffer + recv_command_length, ',');
+    const auto command_end = command_buffer + recv_command_length;
+    auto addr_pos = std::find(start_offset, command_end, ',');
+    if (addr_pos == start_offset || addr_pos == command_end) {
+        return SendReply("E01");
+    }
     VAddr addr = HexToInt(start_offset, static_cast<u32>(addr_pos - start_offset));
 
     start_offset = addr_pos + 1;
-    auto len_pos = std::find(start_offset, command_buffer + recv_command_length, ':');
+    auto len_pos = std::find(start_offset, command_end, ':');
+    if (len_pos == start_offset || len_pos == command_end) {
+        return SendReply("E01");
+    }
     u32 len = HexToInt(start_offset, static_cast<u32>(len_pos - start_offset));
+    const auto encoded_size = static_cast<std::size_t>(command_end - (len_pos + 1));
+    if (len > encoded_size / 2 || len * 2 != encoded_size) {
+        return SendReply("E01");
+    }
 
     auto& memory = Core::System::GetInstance().Memory();
     if (!memory.IsValidVirtualAddress(*current_process, addr)) {
@@ -1414,6 +1428,7 @@ void HandleVCommand() {
             SendReply("E02");
         } else {
             current_process = process.get();
+            current_process_finished = false;
             current_process->SetUnscheduleMode(Kernel::UnscheduleMode::GDB);
             is_running = false;
             if (SetThread(0)) {
@@ -1465,7 +1480,7 @@ void HandleVCommand() {
 }
 
 void OnProcessExit(u32 process_id) {
-    if (!GDBStub::IsConnected || !current_process || current_process->process_id != process_id) {
+    if (!GDBStub::IsConnected() || !current_process || current_process->process_id != process_id) {
         return;
     }
 
@@ -1478,7 +1493,7 @@ void OnProcessExit(u32 process_id) {
 }
 
 void OnThreadExit(u32 thread_id) {
-    if (!GDBStub::IsConnected || !current_thread || current_thread->thread_id != thread_id) {
+    if (!GDBStub::IsConnected() || !current_thread || current_thread->thread_id != thread_id) {
         return;
     }
 

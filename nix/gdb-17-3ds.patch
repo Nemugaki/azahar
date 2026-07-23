@@ -1,0 +1,133 @@
+diff --git a/gdb/Makefile.in b/gdb/Makefile.in
+index 7e42648..3468fe0 100644
+--- a/gdb/Makefile.in
++++ b/gdb/Makefile.in
+@@ -801,6 +801,7 @@ ALL_TARGET_OBS = \
+ 	arch/loongarch.o \
+ 	arch/ppc-linux-common.o \
+ 	arch/x86-linux-tdesc-features.o \
++	arm-3ds-tdep.o \
+ 	arm-bsd-tdep.o \
+ 	arm-fbsd-tdep.o \
+ 	arm-linux-tdep.o \
+@@ -1814,6 +1815,7 @@ ALLDEPFILES = \
+ 	amdgpu-tdep.c \
+ 	arc-linux-nat.c \
+ 	arc-tdep.c \
++	arm-3ds-tdep.c \
+ 	arm-bsd-tdep.c \
+ 	arm-fbsd-nat.c \
+ 	arm-fbsd-tdep.c \
+diff --git a/gdb/arm-3ds-tdep.c b/gdb/arm-3ds-tdep.c
+new file mode 100644
+index 0000000..69d6464
+--- /dev/null
++++ b/gdb/arm-3ds-tdep.c
+@@ -0,0 +1,83 @@
++/* Target-dependent code for the Nintendo 3DS.
++
++   Copyright (C) 2026 Azahar Emulator Project
++
++   This file is part of GDB.
++
++   This program is free software; you can redistribute it and/or modify
++   it under the terms of the GNU General Public License as published by
++   the Free Software Foundation; either version 3 of the License, or
++   (at your option) any later version.
++
++   This program is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++   GNU General Public License for more details.
++
++   You should have received a copy of the GNU General Public License
++   along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
++
++#include "arch/arm-get-next-pcs.h"
++#include "arm-tdep.h"
++#include "osabi.h"
++#include "regcache.h"
++
++static const gdb_byte arm_3ds_arm_le_breakpoint[] = { 0xff, 0x00, 0x00, 0xef };
++static const gdb_byte arm_3ds_thumb_le_breakpoint[] = { 0xff, 0xdf };
++
++static CORE_ADDR
++arm_3ds_get_next_pcs_syscall_next_pc (struct arm_get_next_pcs *self)
++{
++  regcache *regs = gdb::checked_static_cast<regcache *> (self->regcache);
++  bool is_thumb = arm_is_thumb (regs);
++  CORE_ADDR next_pc = regcache_read_pc (regs) + (is_thumb ? 2 : 4);
++  return is_thumb ? MAKE_THUMB_ADDR (next_pc) : next_pc;
++}
++
++static struct arm_get_next_pcs_ops arm_3ds_get_next_pcs_ops = {
++  arm_get_next_pcs_read_memory_unsigned_integer,
++  arm_3ds_get_next_pcs_syscall_next_pc,
++  arm_get_next_pcs_addr_bits_remove,
++  arm_get_next_pcs_is_thumb,
++  nullptr,
++};
++
++static std::vector<CORE_ADDR>
++arm_3ds_software_single_step (struct regcache *regcache)
++{
++  gdbarch *gdbarch = regcache->arch ();
++  arm_gdbarch_tdep *tdep = gdbarch_tdep<arm_gdbarch_tdep> (gdbarch);
++  struct arm_get_next_pcs next_pcs_ctx;
++
++  arm_get_next_pcs_ctor (&next_pcs_ctx, &arm_3ds_get_next_pcs_ops,
++			 gdbarch_byte_order (gdbarch),
++			 gdbarch_byte_order_for_code (gdbarch),
++			 tdep->thumb2_breakpoint != nullptr, regcache);
++
++  std::vector<CORE_ADDR> next_pcs = arm_get_next_pcs (&next_pcs_ctx);
++  for (CORE_ADDR &pc : next_pcs)
++    pc = gdbarch_addr_bits_remove (gdbarch, pc);
++  return next_pcs;
++}
++
++static void
++arm_3ds_init_abi (struct gdbarch_info info, struct gdbarch *gdbarch)
++{
++  arm_gdbarch_tdep *tdep = gdbarch_tdep<arm_gdbarch_tdep> (gdbarch);
++
++  if (info.byte_order_for_code != BFD_ENDIAN_LITTLE)
++    internal_error (_("arm_3ds_init_abi: unsupported byte order"));
++
++  tdep->arm_breakpoint = arm_3ds_arm_le_breakpoint;
++  tdep->arm_breakpoint_size = sizeof (arm_3ds_arm_le_breakpoint);
++  tdep->thumb_breakpoint = arm_3ds_thumb_le_breakpoint;
++  tdep->thumb_breakpoint_size = sizeof (arm_3ds_thumb_le_breakpoint);
++  tdep->fp_model = ARM_FLOAT_VFP;
++  set_gdbarch_get_next_pcs (gdbarch, arm_3ds_software_single_step);
++}
++
++INIT_GDB_FILE (arm_3ds_tdep)
++{
++  gdbarch_register_osabi (bfd_arch_arm, 0, GDB_OSABI_3DS,
++			  arm_3ds_init_abi);
++}
+diff --git a/gdb/configure.tgt b/gdb/configure.tgt
+index 28d99e4..d8b4d1f 100644
+--- a/gdb/configure.tgt
++++ b/gdb/configure.tgt
+@@ -75,7 +75,8 @@ arc*-*-*)
+ 
+ arm*-*-*)
+ 	cpu_obs="aarch32-tdep.o arch/aarch32.o arch/arm.o \
+-		 arch/arm-get-next-pcs.o arm-tdep.o arm-none-tdep.o"
++		 arch/arm-get-next-pcs.o arm-tdep.o arm-none-tdep.o \
++		 arm-3ds-tdep.o"
+ 	;;
+ 
+ hppa*-*-*)
+diff --git a/gdbsupport/osabi.def b/gdbsupport/osabi.def
+index 20db7c6..48e2576 100644
+--- a/gdbsupport/osabi.def
++++ b/gdbsupport/osabi.def
+@@ -53,5 +53,6 @@ GDB_OSABI_DEF (NEWLIB, "Newlib", nullptr)
+ GDB_OSABI_DEF (SDE, "SDE", nullptr)
+ GDB_OSABI_DEF (PIKEOS, "PikeOS", nullptr)
++GDB_OSABI_DEF (3DS, "3DS", nullptr)
+ 
+ GDB_OSABI_DEF_LAST (INVALID, "<invalid>", nullptr)

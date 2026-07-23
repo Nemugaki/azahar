@@ -14,6 +14,21 @@
         "aarch64-linux"
       ];
       forAllSystems = nixpkgs.lib.genAttrs systems;
+      gdb3ds =
+        pkgs:
+        assert pkgs.lib.versions.major pkgs.gdb.version == "17";
+        (pkgs.gdb.override {
+          python3 = pkgs.python3.withPackages (ps: [ ps.protobuf ]);
+        }).overrideAttrs
+          (old: {
+            pname = "gdb-3ds";
+            patches = (old.patches or [ ]) ++ [ ./nix/gdb-17-3ds.patch ];
+            postInstall = (old.postInstall or "") + ''
+              $out/bin/gdb -q -nx -batch -ex "set architecture arm" -ex "set osabi 3DS" -ex "show osabi" 2>&1 \
+                | grep -F 'The current OS ABI is "3DS".'
+              $out/bin/gdb -q -nx -batch -ex "python import google.protobuf"
+            '';
+          });
 
       # Project packaging policy. Change these when a feature should be gated.
       features = {
@@ -47,6 +62,7 @@
           };
         in
         {
+          gdb-3ds = gdb3ds pkgs;
           default = base.overrideAttrs (old: {
             version = "agentic-pica-${self.shortRev or self.dirtyShortRev or "dirty"}";
             src = source;
@@ -81,6 +97,7 @@
               cmake
               ninja
               pkg-config
+              (gdb3ds pkgs)
             ];
           };
         }

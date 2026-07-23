@@ -33,8 +33,36 @@ The main features are:
   - Per-core ARM register selection with unavailable-state reporting and previous-capture change highlighting.
   - Debugger tabs can dock on every edge, tab or nest together, float as non-modal windows, and remain in a static workspace while their content is enabled or disabled; View menu entries always reopen the corresponding tool. The Game view is also a closable, reopenable dock that can move, tab, or float with the workspace.
 - A Qt-free render-debugger library is shared by the emulator producer, Qt, and RPC. Its bounded live session and immutable imported sessions use a documented fixed `.rdbg` interchange format carrying the timeline, register writes, draw associations, shaders, and owned resources; captures are not emulator-state rewind.
+- GDB remote debugging works with GDB 17's handshake, complete ARM/VFP register transfers, safer memory packets, process reattachment, and pre-attach interrupts. The Nix flake includes a patched GDB 17.2 that recognizes the `3DS` OSABI, uses the 3DS ARM/Thumb breakpoint encodings, and software-steps across SVC instructions.
 - Fixed an issue that CiTrace *apparently* had an issue since a GPU refactor from 2023.
 - CiTrace and command histories are bounded by the debugger cache limit; incomplete traces are identified instead of silently saved.
+
+### Nix development and 3DS GDB
+
+The flake supports x86_64 and ARM64 Linux. Its development shell includes the
+project dependencies and the patched `gdb-3ds`:
+
+```sh
+nix develop
+gdb /path/to/title.elf
+```
+
+The debugger can also be run without entering the shell:
+
+```sh
+nix run .#gdb-3ds -- /path/to/title.elf
+```
+
+Enable Azahar's GDB stub in the Debug settings, or launch Azahar with
+`--gdbport 24689`. Once the title is running, connect from GDB:
+
+```gdb
+target remote 127.0.0.1:24689
+```
+
+This GDB build also embeds Python with protobuf for Ghidra's TraceRmi debugger
+bridge. Stock GDB does not recognize Azahar's `3DS` target description; use
+the flake package for live 3DS debugging.
 
 ### Merging
 Per [AI-POLICY.md](AI-POLICY.md) I will not open a merge request to the original repo with any of these changes whatsoever.
