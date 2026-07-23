@@ -50,6 +50,10 @@
           default = base.overrideAttrs (old: {
             version = "agentic-pica-${self.shortRev or self.dirtyShortRev or "dirty"}";
             src = source;
+            postPatch = (old.postPatch or "") + ''
+              echo "${self.rev or self.dirtyRev or "0000000000000000000000000000000000000000"}" > GIT-COMMIT
+              echo "agentic-pica-${self.shortRev or self.dirtyShortRev or "dirty"}" > GIT-TAG
+            '';
             cmakeFlags =
               builtins.filter (
                 flag:

@@ -574,10 +574,8 @@ private:
     /// Image interface
     std::shared_ptr<Frontend::ImageInterface> registered_image_interface;
 
-#ifdef ENABLE_SCRIPTING
-    /// RPC Server for scripting support
+    /// RPC server. Kept in every build so Core::System has one layout in every translation unit.
     std::unique_ptr<RPC::Server> rpc_server;
-#endif
 
     std::unique_ptr<Service::FS::ArchiveManager> archive_manager;
 

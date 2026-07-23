@@ -578,7 +578,7 @@ void GMainWindow::InitializeWidgets() {
     ads::CDockManager::setConfigFlag(ads::CDockManager::DockAreaDynamicTabsMenuButtonVisibility,
                                      true);
     ads::CDockManager::setConfigFlag(ads::CDockManager::EqualSplitOnInsertion, true);
-    dock_manager = new ads::CDockManager(this);
+    dock_manager = new ads::CDockManager(ui->centralwidget);
     ui->horizontalLayout->addWidget(dock_manager);
 
     auto* home = new QWidget;

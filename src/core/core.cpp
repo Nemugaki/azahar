@@ -51,9 +51,7 @@
 #include "core/hw/aes/key.h"
 #include "core/loader/loader.h"
 #include "core/movie.h"
-#ifdef ENABLE_SCRIPTING
 #include "core/rpc/server.h"
-#endif
 #include "network/network.h"
 #include "video_core/custom_textures/custom_tex_manager.h"
 #include "video_core/debug_utils/debug_utils.h"
