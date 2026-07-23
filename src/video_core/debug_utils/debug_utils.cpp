@@ -157,8 +157,11 @@ void DebugContext::ResumeUntilFrame() {
     Core::System::GetInstance().SetDebugState(Core::DebugPauseReason::FrameAdvance);
 }
 
-void DebugContext::OnFrameBoundary() {
+void DebugContext::OnVBlank() {
     ignore_breakpoints_until_frame = false;
+}
+
+void DebugContext::OnFramePresented() {
     auto session = GetRenderSession();
     Debugger::CaptureLimits limits;
     limits.owned_bytes = static_cast<u64>(Settings::values.debugger_cache_mb.GetValue()) << 20;

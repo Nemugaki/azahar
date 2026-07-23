@@ -207,8 +207,11 @@ public:
     /// Resume a GPU breakpoint without immediately stopping again before the next frame.
     void ResumeUntilFrame();
 
-    /// Called by the GPU at the frame boundary to restore temporarily suppressed breakpoints.
-    void OnFrameBoundary();
+    /// Called at VBlank to restore temporarily suppressed breakpoints.
+    void OnVBlank();
+
+    /// Called when the game submits a new top-screen framebuffer.
+    void OnFramePresented();
 
     void SetBreakpoint(Event event, bool enabled) {
         breakpoints[static_cast<int>(event)].enabled = enabled;

@@ -275,6 +275,10 @@ void GPU::SetBufferSwap(u32 screen_id, const Service::GSP::FrameBufferInfo& info
     framebuffer.format = info.format;
     framebuffer.active_fb = info.shown_fb;
 
+    if (screen_id == 0 && impl->debug_context) {
+        impl->debug_context->OnFramePresented();
+    }
+
     // Notify debugger about the buffer swap.
     if (impl->debug_context) {
         impl->debug_context->OnEvent(Pica::DebugContext::Event::BufferSwapped, nullptr);
@@ -500,7 +504,7 @@ void GPU::VBlankCallback(std::uintptr_t user_data, s64 cycles_late) {
     impl->signal_interrupt(Service::GSP::InterruptId::PDC1, 0);
 
     if (impl->debug_context) {
-        impl->debug_context->OnFrameBoundary();
+        impl->debug_context->OnVBlank();
     }
 
     // Present renderered frame.
