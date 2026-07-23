@@ -143,6 +143,7 @@ CMAKE_DEPENDENT_OPTION(ENABLE_OPENGL "Enables the OpenGL renderer" ${DEFAULT_ENA
 CMAKE_DEPENDENT_OPTION(ENABLE_VULKAN "Enables the Vulkan renderer" ON "NOT (BSD MATCHES \"NetBSD\")" OFF)
 
 option(ENABLE_DISCORD_RPC "Enables Discord Rich Presence" OFF)
+option(ENABLE_GAMEMODE "Enables GameMode integration" ON)
 
 option(ENABLE_MICROPROFILE "Enables microprofile capabilities" OFF)
 

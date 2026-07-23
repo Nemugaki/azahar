@@ -81,8 +81,10 @@ if (ENABLE_ROOM)
     target_link_libraries(citra_meta PRIVATE citra_room)
 endif()
 
-if (ENABLE_QT AND UNIX AND NOT APPLE)
+if (ENABLE_QT AND UNIX AND NOT APPLE AND ENABLE_GAMEMODE)
     target_link_libraries(citra_meta PRIVATE Qt6::DBus gamemode)
+elseif (ENABLE_QT AND UNIX AND NOT APPLE)
+    target_link_libraries(citra_meta PRIVATE Qt6::DBus)
 endif()
 
 if (ENABLE_QT AND APPLE)

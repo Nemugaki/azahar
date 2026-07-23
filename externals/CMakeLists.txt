@@ -371,7 +371,7 @@ endif()
 target_compile_options(httplib INTERFACE -DCPPHTTPLIB_OPENSSL_SUPPORT)
 target_link_libraries(httplib INTERFACE ${OPENSSL_LIBRARIES})
 
-if (UNIX AND NOT APPLE)
+if (UNIX AND NOT APPLE AND ENABLE_GAMEMODE)
     add_subdirectory(gamemode EXCLUDE_FROM_ALL)
 endif()
 

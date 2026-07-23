@@ -109,12 +109,13 @@ add_library(citra_common STATIC EXCLUDE_FROM_ALL
 
 target_include_directories(citra_common PUBLIC ${CMAKE_BINARY_DIR}/src)
 
-if (UNIX AND NOT APPLE)
+if (UNIX AND NOT APPLE AND ENABLE_GAMEMODE)
   target_sources(citra_common PRIVATE
     linux/gamemode.cpp
     linux/gamemode.h
   )
 
+  target_compile_definitions(citra_common PUBLIC ENABLE_GAMEMODE)
   target_link_libraries(citra_common PRIVATE gamemode)
 endif()
 

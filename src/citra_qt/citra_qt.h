@@ -349,7 +349,7 @@ private:
     void UpdateVolumeUI();
     void UpdateAPIIndicator(bool update = false);
     void UpdateStatusButtons();
-#ifdef __unix__
+#ifdef ENABLE_GAMEMODE
     void SetGamemodeEnabled(bool state);
 #endif
 

@@ -334,8 +334,10 @@ endif()
 
 if (APPLE)
     target_link_libraries(citra_qt PRIVATE Qt6::QDarwinCameraPermissionPlugin)
-elseif (UNIX)
+elseif (UNIX AND ENABLE_GAMEMODE)
     target_link_libraries(citra_qt PRIVATE Qt6::DBus gamemode)
+elseif (UNIX)
+    target_link_libraries(citra_qt PRIVATE Qt6::DBus)
 endif()
 
 target_compile_definitions(citra_qt PRIVATE

@@ -39,7 +39,9 @@
 #include <QVariant>
 #include <QtDBus/QDBusInterface>
 #include <QtDBus/QtDBus>
+#ifdef ENABLE_GAMEMODE
 #include "common/linux/gamemode.h"
+#endif
 #endif
 #include "citra_meta/common_strings.h"
 #include "citra_qt/aboutdialog.h"
@@ -404,7 +406,7 @@ GMainWindow::GMainWindow(Core::System& system_)
         }
     }
 
-#ifdef __unix__
+#ifdef ENABLE_GAMEMODE
     SetGamemodeEnabled(Settings::values.enable_gamemode.GetValue());
 #endif
 
@@ -1709,7 +1711,7 @@ void GMainWindow::ShutdownGame() {
 #ifdef ENABLE_DISCORD_RPC
     discord_rpc->Update(false);
 #endif
-#ifdef __unix__
+#ifdef ENABLE_GAMEMODE
     Common::Linux::StopGamemode();
 #endif
 
@@ -2667,7 +2669,7 @@ void GMainWindow::OnResumeGame(bool first_start) {
 #endif
     }
 
-#ifdef __unix__
+#ifdef ENABLE_GAMEMODE
     Common::Linux::StartGamemode();
 #endif
 
@@ -2693,7 +2695,7 @@ void GMainWindow::OnPauseGame() {
     UpdateMenuState();
     AllowOSSleep();
 
-#ifdef __unix__
+#ifdef ENABLE_GAMEMODE
     Common::Linux::StopGamemode();
 #endif
 }
@@ -3113,7 +3115,7 @@ void GMainWindow::OnConfigure() {
 #ifdef ENABLE_DISCORD_RPC
     const bool old_discord_presence = UISettings::values.enable_discord_presence.GetValue();
 #endif
-#ifdef __unix__
+#ifdef ENABLE_GAMEMODE
     const bool old_gamemode = Settings::values.enable_gamemode.GetValue();
 #endif
     auto result = configureDialog.exec();
@@ -3130,7 +3132,7 @@ void GMainWindow::OnConfigure() {
             discord_rpc->Update(system.IsPoweredOn());
         }
 #endif
-#ifdef __unix__
+#ifdef ENABLE_GAMEMODE
         if (Settings::values.enable_gamemode.GetValue() != old_gamemode) {
             SetGamemodeEnabled(Settings::values.enable_gamemode.GetValue());
         }
@@ -4500,7 +4502,7 @@ void GMainWindow::SetDiscordEnabled([[maybe_unused]] bool state) {
 }
 #endif
 
-#ifdef __unix__
+#ifdef ENABLE_GAMEMODE
 void GMainWindow::SetGamemodeEnabled(bool state) {
     if (emulation_running) {
         Common::Linux::SetGamemodeState(state);

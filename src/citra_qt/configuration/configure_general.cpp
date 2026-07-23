@@ -40,7 +40,7 @@ ConfigureGeneral::ConfigureGeneral(QWidget* parent)
     ui->emulation_speed_display_label->setMinimumWidth(width);
     ui->emulation_speed_combo->setVisible(!Settings::IsConfiguringGlobal());
     ui->screenshot_combo->setVisible(!Settings::IsConfiguringGlobal());
-#ifndef __unix__
+#ifndef ENABLE_GAMEMODE
     ui->toggle_gamemode->setVisible(false);
 #endif
 #ifndef ENABLE_QT_UPDATE_CHECKER
@@ -96,7 +96,7 @@ void ConfigureGeneral::SetConfiguration() {
         ui->update_channel_combobox->setCurrentIndex(
             UISettings::values.update_check_channel.GetValue());
 #endif
-#ifdef __unix__
+#ifdef ENABLE_GAMEMODE
         ui->toggle_gamemode->setChecked(Settings::values.enable_gamemode.GetValue());
 #endif
     }
@@ -186,7 +186,7 @@ void ConfigureGeneral::ApplyConfiguration() {
         UISettings::values.check_for_update_on_start = ui->toggle_update_checker->isChecked();
         UISettings::values.update_check_channel = ui->update_channel_combobox->currentIndex();
 #endif
-#ifdef __unix__
+#ifdef ENABLE_GAMEMODE
         Settings::values.enable_gamemode = ui->toggle_gamemode->isChecked();
 #endif
     }

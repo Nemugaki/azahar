@@ -604,7 +604,7 @@ void QtConfig::ReadMiscellaneousValues() {
 
     ReadBasicSetting(Settings::values.log_filter);
     ReadBasicSetting(Settings::values.log_regex_filter);
-#ifdef __unix__
+#ifdef ENABLE_GAMEMODE
     ReadBasicSetting(Settings::values.enable_gamemode);
 #endif
 #ifdef ENABLE_QT_UPDATE_CHECKER
@@ -1209,7 +1209,7 @@ void QtConfig::SaveMiscellaneousValues() {
 
     WriteBasicSetting(Settings::values.log_filter);
     WriteBasicSetting(Settings::values.log_regex_filter);
-#ifdef __unix__
+#ifdef ENABLE_GAMEMODE
     WriteBasicSetting(Settings::values.enable_gamemode);
 #endif
 #ifdef ENABLE_QT_UPDATE_CHECKER
