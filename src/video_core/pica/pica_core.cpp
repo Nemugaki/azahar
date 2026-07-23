@@ -787,8 +787,46 @@ void PicaCore::RecordDebuggerDraw(const Debugger::DrawInfo& info, bool is_indexe
     const auto& swizzles = vs_setup.GetSwizzleData();
     shader.code.assign(program.begin(), program.begin() + vs_setup.GetBiggestProgramSize());
     shader.metadata.assign(swizzles.begin(), swizzles.begin() + vs_setup.GetBiggestSwizzleSize());
-    shader.state.resize(sizeof(vs_setup.uniforms));
-    std::memcpy(shader.state.data(), &vs_setup.uniforms, sizeof(vs_setup.uniforms));
+    const auto append_state = [&shader](const auto& value) {
+        const auto* bytes = reinterpret_cast<const u8*>(&value);
+        shader.state.insert(shader.state.end(), bytes, bytes + sizeof(value));
+    };
+    std::array<std::array<float, 4>, 96> float_uniforms{};
+    std::array<std::array<u8, 4>, 4> integer_uniforms{};
+    std::array<bool, 16> bool_uniforms{};
+    std::array<std::array<float, 4>, 16> fixed_attributes{};
+    std::array<bool, 16> fixed_written{};
+    std::array<u8, 16> input_map{};
+    std::array<std::array<u8, 4>, 7> output_map{};
+    for (std::size_t reg = 0; reg != float_uniforms.size(); ++reg)
+        for (std::size_t component = 0; component != 4; ++component)
+            float_uniforms[reg][component] =
+                vs_setup.uniforms.f[reg][component].ToFloat32();
+    for (std::size_t reg = 0; reg != integer_uniforms.size(); ++reg)
+        for (std::size_t component = 0; component != 4; ++component)
+            integer_uniforms[reg][component] = vs_setup.uniforms.i[reg][component];
+    bool_uniforms = vs_setup.uniforms.b;
+    for (std::size_t attribute = 0; attribute != fixed_attributes.size(); ++attribute) {
+        for (std::size_t component = 0; component != 4; ++component)
+            fixed_attributes[attribute][component] =
+                input_default_attributes[attribute][component].ToFloat32();
+        fixed_written[attribute] = true;
+        input_map[attribute] =
+            static_cast<u8>(regs.internal.vs.GetRegisterForAttribute(attribute));
+    }
+    for (std::size_t reg = 0; reg != output_map.size(); ++reg) {
+        const u32 raw = regs.internal.rasterizer.vs_output_attributes[reg].raw;
+        for (std::size_t component = 0; component != 4; ++component)
+            output_map[reg][component] = static_cast<u8>(
+                (raw >> (component * 8)) & 0x1f);
+    }
+    append_state(float_uniforms);
+    append_state(integer_uniforms);
+    append_state(bool_uniforms);
+    append_state(fixed_attributes);
+    append_state(fixed_written);
+    append_state(input_map);
+    append_state(output_map);
 
     std::vector<Debugger::ResourceView> resources;
     resources.reserve(8);
