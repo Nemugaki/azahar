@@ -205,6 +205,7 @@ CaptureViewerWidget::CaptureViewerWidget(std::shared_ptr<RenderSessionManager> s
     output_scroll->setWidget(preview);
     inspector_layout->addWidget(output_scroll, 1);
     output_status = new QLabel;
+    output_status->setObjectName(QStringLiteral("renderOutputStatus"));
     output_status->setWordWrap(true);
     output_status->setTextInteractionFlags(Qt::TextSelectableByMouse);
     inspector_layout->addWidget(output_status);
@@ -513,11 +514,11 @@ void CaptureViewerWidget::FilterTimeline(const QString& text) {
 }
 
 void CaptureViewerWidget::SelectEntry(QTreeWidgetItem* item) {
+    displayed_output_sequence.reset();
     selected_target.reset();
     open_color->setEnabled(false);
     open_depth->setEnabled(false);
     if (!item || !item->data(0, Qt::UserRole).isValid()) {
-        displayed_output_sequence.reset();
         details->setText(tr("Select a draw call to inspect it."));
         static_cast<ScaledPixmapLabel*>(preview)->SetPixmap({});
         preview->setText(tr("Select a draw call to view its captured output."));
