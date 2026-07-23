@@ -147,7 +147,10 @@ CaptureViewerWidget::CaptureViewerWidget(std::shared_ptr<RenderSessionManager> s
     filter->setClearButtonEnabled(true);
     follow_live = new QCheckBox{tr("Follow live")};
     follow_live->setChecked(true);
-    freeze_timeline = new QCheckBox{tr("Freeze")};
+    freeze_timeline = new QCheckBox{tr("Freeze selection")};
+    freeze_timeline->setObjectName(QStringLiteral("freezeRenderSelection"));
+    freeze_timeline->setToolTip(
+        tr("Keeps the selected event while the bounded live timeline continues to refresh."));
     auto* refresh = new QPushButton{tr("Refresh")};
     filter_row->addWidget(new QLabel{tr("Filter:")});
     filter_row->addWidget(filter, 1);
@@ -261,7 +264,12 @@ CaptureViewerWidget::CaptureViewerWidget(std::shared_ptr<RenderSessionManager> s
     auto* timer = new QTimer{this};
     timer->setInterval(500);
     connect(timer, &QTimer::timeout, this, [this] {
-        if (active && follow_live->isChecked() && !freeze_timeline->isChecked()) {
+        if (!active || !follow_live->isChecked()) {
+            return;
+        }
+        const auto status = sessions->GetActive()->GetStatus();
+        if (!freeze_timeline->isChecked() ||
+            status.oldest_sequence != displayed_status.oldest_sequence) {
             Refresh();
         }
     });
@@ -467,19 +475,26 @@ void CaptureViewerWidget::Refresh() {
     event_position->setText(draw_items.empty() ? tr("No events")
                                                : tr("%1 events").arg(draw_items.size()));
     FilterTimeline(filter->text());
-    if (follow_live->isChecked() && was_at_bottom && !draw_items.empty()) {
+    if (follow_live->isChecked() && !freeze_timeline->isChecked() && was_at_bottom &&
+        !draw_items.empty()) {
         timeline->setCurrentItem(draw_items.back());
         timeline->scrollToItem(draw_items.back());
     } else {
+        bool restored = false;
         if (selected_sequence) {
             for (auto* item : draw_items) {
                 const int index = item->data(0, Qt::UserRole).toInt();
                 if (index >= 0 && index < static_cast<int>(entries.size()) &&
                     entries[index].sequence == *selected_sequence) {
                     timeline->setCurrentItem(item);
+                    restored = true;
                     break;
                 }
             }
+        }
+        if (!restored && !draw_items.empty()) {
+            timeline->setCurrentItem(freeze_timeline->isChecked() ? draw_items.front()
+                                                                  : draw_items.back());
         }
         scroll_bar->setValue(old_scroll);
     }
@@ -592,10 +607,13 @@ void CaptureViewerWidget::UpdateOutput(u32 sequence) {
     if (!resource) {
         static_cast<ScaledPixmapLabel*>(preview)->SetPixmap({});
         preview->setText(tr("Output was not captured for this draw."));
+        const bool live = sessions->GetActiveId() == RenderSessionManager::LiveSessionId;
+        const auto status = sessions->GetActive()->GetStatus();
         output_status->setText(
-            sessions->GetActiveId() == RenderSessionManager::LiveSessionId
-                ? tr("Output capture is available while the live viewer is active.")
-                : tr("This imported capture does not contain output pixels for this draw."));
+            live && sequence < status.oldest_sequence
+                ? tr("This event has expired from the bounded live capture.")
+            : live ? tr("Output capture is available while the live viewer is active.")
+                   : tr("This imported capture does not contain output pixels for this draw."));
         return;
     }
     displayed_output_sequence = sequence;

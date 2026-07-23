@@ -5,6 +5,7 @@
 #include <cassert>
 
 #include <QApplication>
+#include <QCheckBox>
 #include <QLabel>
 #include <QSlider>
 #include <QTreeWidget>
@@ -40,5 +41,14 @@ int main(int argc, char** argv) {
     assert(viewer.SelectedTarget().has_value());
     assert(details && details->text().contains(QStringLiteral("offset 8")));
     assert(details->text().contains(QStringLiteral("Immutable render state")));
+
+    viewer.findChild<QCheckBox*>(QStringLiteral("freezeRenderSelection"))->setChecked(true);
+    live->SetFrameLimit(1);
+    live->RecordFrame();
+    live->SetRenderTarget({0x5000, 0x6000, 16, 16, 0, 1});
+    live->RecordDraw(draw, shader, resources, registers);
+    viewer.Refresh();
+    assert(timeline->currentItem());
+    assert(viewer.SelectedTarget()->color_address == 0x5000);
     return 0;
 }
