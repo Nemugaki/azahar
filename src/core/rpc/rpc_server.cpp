@@ -949,7 +949,8 @@ void RPCServer::HandleRenderDebug(Packet& packet, RenderDebugOperation operation
         const auto page = session->QueryPage(
             epoch, {.start = start, .count = std::min(count, maximum), .frame = frame});
         const RenderTimelinePageReply header{
-            page.epoch, page.next_sequence, static_cast<u32>(page.entries.size()),
+            static_cast<u32>(page.epoch), static_cast<u32>(page.epoch >> 32), page.next_sequence,
+            static_cast<u32>(page.entries.size()),
             static_cast<u32>(page.has_more) | static_cast<u32>(page.stale) << 1};
         std::memcpy(packet.GetPacketData().data(), &header, sizeof(header));
         for (std::size_t index = 0; index < page.entries.size(); ++index) {

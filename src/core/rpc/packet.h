@@ -290,12 +290,9 @@ struct RenderCaptureReply {
     u32 truncated;
 };
 
-struct RenderTimelinePageReply {
-    u64 epoch;
-    u32 next_sequence;
-    u32 count;
-    u32 flags;
-};
+// Wire words: epoch low/high, next sequence, entry count, flags.
+using RenderTimelinePageReply = std::array<u32, 5>;
+static_assert(sizeof(RenderTimelinePageReply) == 0x14);
 
 struct RenderStatePageReply {
     u32 total;
