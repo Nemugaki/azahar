@@ -7,7 +7,7 @@
 #include <QLabel>
 #include <QPushButton>
 #include "citra_qt/debugger/graphics/graphics_breakpoint_observer.h"
-#include "debugger/render_session.h"
+#include "render_debugger/render_session.h"
 
 class QComboBox;
 class QSpinBox;

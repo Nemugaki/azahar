@@ -7,8 +7,8 @@
 #include <filesystem>
 #include <fstream>
 
-#include "debugger/capture_file.h"
-#include "debugger/render_session.h"
+#include "render_debugger/capture_file.h"
+#include "render_debugger/render_session.h"
 
 TEST_CASE("Render debugger session retains and filters bounded metadata", "[debugger]") {
     Debugger::RenderSession session;
@@ -29,7 +29,7 @@ TEST_CASE("Render debugger session retains and filters bounded metadata", "[debu
     CHECK(status.truncated);
     CHECK(session.GetPosition().frame == 1);
 
-    Debugger::RenderSessionManager sessions;
+    Debugger::RenderSessionManager sessions{"test producer", "software"};
     Debugger::Capture external{
         .producer = "external",
         .backend = "software",

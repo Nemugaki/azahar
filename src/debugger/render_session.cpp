@@ -2,12 +2,10 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
-#include "debugger/render_session.h"
+#include "render_debugger/render_session.h"
 
 #include <algorithm>
 #include <cstring>
-
-#include "common/scm_rev.h"
 
 namespace Debugger {
 namespace {
@@ -219,7 +217,7 @@ TimelineEntry RenderSession::Record(TimelineKind kind, const DrawInfo& info) {
         ++frame_draw_index;
     }
     timeline.push_back(entry);
-    if (timeline.size() > MaxEntries) {
+    if (timeline.size() > capture_limits.timeline_entries) {
         timeline.pop_front();
         truncated = true;
         PruneRichCapture();
@@ -323,7 +321,17 @@ void RenderSession::SetFrameLimit(u32 limit) {
 
 void RenderSession::SetCaptureLimits(CaptureLimits limits) {
     std::lock_guard lock{mutex};
+    limits.timeline_entries = std::max<std::size_t>(1, limits.timeline_entries);
     capture_limits = limits;
+    bool removed = false;
+    while (timeline.size() > limits.timeline_entries) {
+        timeline.pop_front();
+        truncated = true;
+        removed = true;
+    }
+    if (removed) {
+        PruneRichCapture();
+    }
     if (writes.size() > limits.register_writes || draws.size() > limits.draws ||
         shaders.size() > limits.shaders || resources.size() > limits.resources ||
         owned_bytes > limits.owned_bytes) {
@@ -634,10 +642,9 @@ void RenderSession::TrimFrames() {
     }
 }
 
-RenderSessionManager::RenderSessionManager() {
-    const std::string producer =
-        std::string{"Azahar "} + Common::g_scm_rev + " " + Common::g_scm_desc;
-    sessions.push_back({{LiveSessionId, producer, "Pica", Timeline, true, true, false},
+RenderSessionManager::RenderSessionManager(std::string producer, std::string backend) {
+    sessions.push_back({{LiveSessionId, std::move(producer), std::move(backend), Timeline, true,
+                         true, false},
                         std::make_shared<RenderSession>()});
 }
 

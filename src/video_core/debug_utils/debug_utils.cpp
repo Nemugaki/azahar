@@ -12,6 +12,7 @@
 #include <nihstro/shader_binary.h>
 #include "common/assert.h"
 #include "common/bit_field.h"
+#include "common/scm_rev.h"
 #include "common/settings.h"
 #include "common/vector_math.h"
 #include "core/core.h"
@@ -28,10 +29,11 @@ using nihstro::DVLPHeader;
 
 namespace Pica {
 
-DebugContext::DebugContext() : render_sessions{std::make_shared<Debugger::RenderSessionManager>()} {
+DebugContext::DebugContext()
+    : render_sessions{std::make_shared<Debugger::RenderSessionManager>(
+          std::string{"Azahar "} + Common::g_scm_rev + " " + Common::g_scm_desc, "Pica")} {
     Debugger::CaptureLimits limits;
-    limits.total_bytes = static_cast<u64>(Settings::values.debugger_cache_mb.GetValue()) << 20;
-    limits.owned_bytes = limits.total_bytes;
+    limits.owned_bytes = static_cast<u64>(Settings::values.debugger_cache_mb.GetValue()) << 20;
     GetRenderSession()->SetCaptureLimits(limits);
 }
 
@@ -159,8 +161,7 @@ void DebugContext::OnFrameBoundary() {
     ignore_breakpoints_until_frame = false;
     auto session = GetRenderSession();
     Debugger::CaptureLimits limits;
-    limits.total_bytes = static_cast<u64>(Settings::values.debugger_cache_mb.GetValue()) << 20;
-    limits.owned_bytes = limits.total_bytes;
+    limits.owned_bytes = static_cast<u64>(Settings::values.debugger_cache_mb.GetValue()) << 20;
     session->SetCaptureLimits(limits);
     session->RecordFrame();
 }

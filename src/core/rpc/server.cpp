@@ -7,11 +7,13 @@
 #include "core/rpc/rpc_server.h"
 #include "core/rpc/server.h"
 #include "core/rpc/udp_server.h"
+#include "video_core/debug_utils/debug_utils.h"
 
 namespace Core::RPC {
 
 Server::Server(Core::System& system_, Core::RPC::EmulationControlHandler emulation_control_handler)
-    : rpc_server{system_, std::move(emulation_control_handler)} {
+    : rpc_server{system_, std::move(emulation_control_handler),
+                 Pica::g_debug_context ? Pica::g_debug_context->GetRenderSessions() : nullptr} {
     const auto callback = [this](std::unique_ptr<Packet> new_request) {
         NewRequestCallback(std::move(new_request));
     };

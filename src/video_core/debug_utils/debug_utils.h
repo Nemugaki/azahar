@@ -16,7 +16,7 @@
 #include <utility>
 #include <vector>
 #include "common/common_types.h"
-#include "debugger/render_session.h"
+#include "render_debugger/render_session.h"
 #include "video_core/pica/output_vertex.h"
 #include "video_core/pica/regs_rasterizer.h"
 #include "video_core/shader/debug_data.h"

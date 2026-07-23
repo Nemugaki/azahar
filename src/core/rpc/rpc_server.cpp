@@ -12,7 +12,7 @@
 #include "core/memory.h"
 #include "core/rpc/packet.h"
 #include "core/rpc/rpc_server.h"
-#include "debugger/capture_file.h"
+#include "render_debugger/capture_file.h"
 #include "video_core/debug_utils/debug_utils.h"
 #include "video_core/gpu.h"
 #include "video_core/gpu_debugger.h"
@@ -47,8 +47,10 @@ bool IsWritableMemoryRange(u32 address, std::size_t size) {
 
 } // namespace
 
-RPCServer::RPCServer(Core::System& system_, EmulationControlHandler emulation_control_handler_)
-    : system{system_}, emulation_control_handler{std::move(emulation_control_handler_)} {
+RPCServer::RPCServer(Core::System& system_, EmulationControlHandler emulation_control_handler_,
+                     std::shared_ptr<Debugger::RenderSessionManager> render_sessions_)
+    : system{system_}, emulation_control_handler{std::move(emulation_control_handler_)},
+      render_sessions{std::move(render_sessions_)} {
     LOG_INFO(RPC_Server, "Starting RPC server.");
     request_handler_thread =
         std::jthread([this](std::stop_token stop_token) { HandleRequestsLoop(stop_token); });
@@ -303,12 +305,11 @@ void RPCServer::HandleRenderSession(Packet& packet, RenderSessionOperation opera
         SendError(packet, Error::PermissionDenied);
         return;
     }
-    const auto context = Pica::g_debug_context;
-    if (!context) {
+    if (!render_sessions) {
         SendError(packet, Error::InvalidState);
         return;
     }
-    const auto sessions = context->GetRenderSessions();
+    const auto& sessions = render_sessions;
     if (path.find('\0') != std::string::npos) {
         SendError(packet, Error::InvalidArgument);
         return;
@@ -356,9 +357,9 @@ void RPCServer::HandleRenderSession(Packet& packet, RenderSessionOperation opera
         id = sessions->GetActiveId();
     } else if (operation == RenderSessionOperation::Import) {
         Debugger::Capture capture;
-        Debugger::CaptureLimits limits;
+        Debugger::CaptureReadLimits limits;
         limits.total_bytes = static_cast<u64>(Settings::values.debugger_cache_mb.GetValue()) << 20;
-        limits.owned_bytes = limits.total_bytes;
+        limits.capture.owned_bytes = limits.total_bytes;
         std::string error;
         if (path.empty() || !Debugger::LoadCapture(path, capture, error, limits)) {
             SendError(packet, Error::InvalidArgument);
@@ -400,12 +401,11 @@ void RPCServer::HandleRenderSession(Packet& packet, RenderSessionOperation opera
 
 void RPCServer::HandleRenderOutput(Packet& packet, RenderOutputOperation operation, u64 session_id,
                                    u32 sequence, u32 offset, u32 count) {
-    const auto context = Pica::g_debug_context;
-    if (!context) {
+    if (!render_sessions) {
         SendError(packet, Error::InvalidState);
         return;
     }
-    const auto sessions = context->GetRenderSessions();
+    const auto& sessions = render_sessions;
     if (!session_id) {
         session_id = sessions->GetActiveId();
     }
@@ -461,7 +461,11 @@ void RPCServer::HandleRenderDebug(Packet& packet, RenderDebugOperation operation
         SendError(packet, Error::InvalidState);
         return;
     }
-    const auto sessions = context->GetRenderSessions();
+    const auto& sessions = render_sessions;
+    if (!sessions) {
+        SendError(packet, Error::InvalidState);
+        return;
+    }
 
     if (operation == RenderDebugOperation::Capabilities) {
         const std::string build =
@@ -1139,7 +1143,11 @@ void RPCServer::HandlePicaTimeline(Packet& packet, PicaTimelineOperation operati
         packet.SendReply();
         return;
     }
-    const auto sessions = context->GetRenderSessions();
+    const auto& sessions = render_sessions;
+    if (!sessions) {
+        SendError(packet, Error::InvalidState);
+        return;
+    }
     const auto session = sessions->GetActive();
     if (operation == PicaTimelineOperation::Clear) {
         if (sessions->GetActiveId() != Debugger::RenderSessionManager::LiveSessionId) {
@@ -1192,7 +1200,12 @@ void RPCServer::HandlePicaRenderTarget(Packet& packet) {
     if (!context) {
         packet.SetPacketDataSize(0);
     } else {
-        const auto target = context->GetRenderSessions()->GetActive()->GetRenderTarget();
+        if (!render_sessions) {
+            packet.SetPacketDataSize(0);
+            packet.SendReply();
+            return;
+        }
+        const auto target = render_sessions->GetActive()->GetRenderTarget();
         const PicaRenderTargetReply reply{target.color_address, target.depth_address,
                                           target.width,         target.height,
                                           target.color_format,  target.depth_format};

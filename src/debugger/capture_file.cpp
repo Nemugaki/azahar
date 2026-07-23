@@ -2,7 +2,7 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
-#include "debugger/capture_file.h"
+#include "render_debugger/capture_file.h"
 
 #include <algorithm>
 #include <array>
@@ -10,9 +10,9 @@
 #include <filesystem>
 #include <fstream>
 #include <limits>
+#include <sstream>
+#include <streambuf>
 #include <unordered_set>
-
-#include "common/swap.h"
 
 namespace Debugger {
 namespace {
@@ -25,6 +25,37 @@ constexpr u64 KnownCapabilities =
 constexpr std::size_t MaxIdentityLength = 1024;
 constexpr std::size_t MaxGapLength = 4096;
 constexpr std::size_t MaxGaps = 1U << 20;
+
+template <typename T>
+struct LittleEndian {
+    std::array<u8, sizeof(T)> bytes{};
+
+    LittleEndian() = default;
+    LittleEndian(T value) {
+        for (std::size_t index = 0; index < bytes.size(); ++index) {
+            bytes[index] = static_cast<u8>(value >> (index * 8));
+        }
+    }
+    operator T() const {
+        T value{};
+        for (std::size_t index = 0; index < bytes.size(); ++index) {
+            value |= static_cast<T>(bytes[index]) << (index * 8);
+        }
+        return value;
+    }
+};
+using u32_le = LittleEndian<u32>;
+using u64_le = LittleEndian<u64>;
+static_assert(sizeof(u32_le) == 4);
+static_assert(sizeof(u64_le) == 8);
+
+class SpanBuffer final : public std::streambuf {
+public:
+    explicit SpanBuffer(std::span<const u8> bytes) {
+        auto* begin = const_cast<char*>(reinterpret_cast<const char*>(bytes.data()));
+        setg(begin, begin, begin + bytes.size());
+    }
+};
 
 #pragma pack(push, 1)
 struct FileHeader {
@@ -319,7 +350,7 @@ bool AddOwned(u64 bytes, u64 limit, u64& total) {
 
 } // namespace
 
-bool SaveCapture(const std::string& path, const Capture& capture, std::string& error) {
+bool SerializeCapture(const Capture& capture, std::vector<u8>& bytes, std::string& error) {
     error.clear();
     if (!ValidateCapture(capture, error)) {
         return false;
@@ -339,13 +370,7 @@ bool SaveCapture(const std::string& path, const Capture& capture, std::string& e
                             static_cast<u32>(capture.shaders.size()),
                             static_cast<u32>(capture.resources.size()),
                             capture.owned_bytes};
-    const std::filesystem::path destination{path};
-    const auto temporary = destination.string() + ".tmp";
-    std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
-    if (!output) {
-        error = "could not open capture for writing";
-        return false;
-    }
+    std::ostringstream output(std::ios::binary);
     Write(output, header);
     output.write(capture.producer.data(), capture.producer.size());
     output.write(capture.backend.data(), capture.backend.size());
@@ -388,12 +413,38 @@ bool SaveCapture(const std::string& path, const Capture& capture, std::string& e
         output.write(reinterpret_cast<const char*>(resource.bytes.data()), resource.bytes.size());
     }
     if (!output) {
+        error = "failed while serializing capture";
+        return false;
+    }
+    const std::string serialized = std::move(output).str();
+    bytes.assign(serialized.begin(), serialized.end());
+    return true;
+}
+
+bool SaveCapture(const std::string& path, const Capture& capture, std::string& error) {
+    std::vector<u8> bytes;
+    if (!SerializeCapture(capture, bytes, error)) {
+        return false;
+    }
+
+    const std::filesystem::path destination{path};
+    const auto temporary = destination.string() + ".tmp";
+    std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
+    if (!output ||
+        (!bytes.empty() &&
+         !output.write(reinterpret_cast<const char*>(bytes.data()), bytes.size()))) {
         error = "failed while writing capture";
         std::error_code ignored;
         std::filesystem::remove(temporary, ignored);
         return false;
     }
     output.close();
+    if (!output) {
+        error = "failed while writing capture";
+        std::error_code ignored;
+        std::filesystem::remove(temporary, ignored);
+        return false;
+    }
     std::error_code rename_error;
     std::filesystem::rename(temporary, destination, rename_error);
     if (rename_error) {
@@ -405,21 +456,16 @@ bool SaveCapture(const std::string& path, const Capture& capture, std::string& e
     return true;
 }
 
-bool LoadCapture(const std::string& path, Capture& capture, std::string& error,
-                 const CaptureLimits& limits) {
+bool DeserializeCapture(std::span<const u8> bytes, Capture& capture, std::string& error,
+                        const CaptureReadLimits& limits) {
     error.clear();
-    std::ifstream input(path, std::ios::binary | std::ios::ate);
-    const auto end = input.tellg();
-    if (!input) {
-        error = "could not open capture";
-        return false;
-    }
-    if (end < 0 || static_cast<u64>(end) > limits.total_bytes ||
-        static_cast<u64>(end) < sizeof(FileHeader)) {
+    if (bytes.size() > limits.total_bytes || bytes.size() < sizeof(FileHeader)) {
         error = "capture exceeds configured limits";
         return false;
     }
-    input.seekg(0);
+    SpanBuffer buffer{bytes};
+    std::istream input{&buffer};
+    const u64 end = bytes.size();
 
     FileHeader header{};
     if (!Read(input, header) || header.magic != Magic ||
@@ -439,10 +485,10 @@ bool LoadCapture(const std::string& path, Capture& capture, std::string& error,
     const u32 shader_count = header.shader_count;
     const u32 resource_count = header.resource_count;
     if (producer_size > MaxIdentityLength || backend_size > MaxIdentityLength ||
-        gap_count > MaxGaps || timeline_count > limits.timeline_entries ||
-        write_count > limits.register_writes || draw_count > limits.draws ||
-        shader_count > limits.shaders || resource_count > limits.resources ||
-        static_cast<u64>(header.owned_bytes) > limits.owned_bytes) {
+        gap_count > MaxGaps || timeline_count > limits.capture.timeline_entries ||
+        write_count > limits.capture.register_writes || draw_count > limits.capture.draws ||
+        shader_count > limits.capture.shaders || resource_count > limits.capture.resources ||
+        static_cast<u64>(header.owned_bytes) > limits.capture.owned_bytes) {
         error = "capture exceeds configured limits";
         return false;
     }
@@ -549,7 +595,7 @@ bool LoadCapture(const std::string& path, Capture& capture, std::string& error,
                                            static_cast<u32>(disk.metadata_count)) *
                               sizeof(u32) +
                           static_cast<u32>(disk.state_size);
-        if (!AddOwned(bytes, limits.owned_bytes, read_owned)) {
+        if (!AddOwned(bytes, limits.capture.owned_bytes, read_owned)) {
             error = "capture shader bytes exceed configured limits";
             return false;
         }
@@ -568,7 +614,7 @@ bool LoadCapture(const std::string& path, Capture& capture, std::string& error,
     for (u32 index = 0; index < resource_count; ++index) {
         ResourceDisk disk{};
         if (!Read(input, disk) ||
-            !AddOwned(static_cast<u32>(disk.byte_size), limits.owned_bytes, read_owned)) {
+            !AddOwned(static_cast<u32>(disk.byte_size), limits.capture.owned_bytes, read_owned)) {
             error = "invalid capture resource header";
             return false;
         }
@@ -599,6 +645,29 @@ bool LoadCapture(const std::string& path, Capture& capture, std::string& error,
     }
     capture = std::move(loaded);
     return true;
+}
+
+bool LoadCapture(const std::string& path, Capture& capture, std::string& error,
+                 const CaptureReadLimits& limits) {
+    error.clear();
+    std::ifstream input(path, std::ios::binary | std::ios::ate);
+    const auto end = input.tellg();
+    if (!input) {
+        error = "could not open capture";
+        return false;
+    }
+    if (end < 0 || static_cast<u64>(end) > limits.total_bytes) {
+        error = "capture exceeds configured limits";
+        return false;
+    }
+    std::vector<u8> bytes(static_cast<std::size_t>(end));
+    input.seekg(0);
+    if (!bytes.empty() &&
+        !input.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()))) {
+        error = "failed while reading capture";
+        return false;
+    }
+    return DeserializeCapture(bytes, capture, error, limits);
 }
 
 } // namespace Debugger

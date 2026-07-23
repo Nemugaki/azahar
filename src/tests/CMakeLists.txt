@@ -30,7 +30,7 @@ if (BSD STREQUAL "NetBSD")
     disable_pax_mprotect(tests)
 endif()
 
-target_link_libraries(tests PRIVATE azahar_debugger citra_common citra_core video_core audio_core)
+target_link_libraries(tests PRIVATE render_debugger citra_common citra_core video_core audio_core)
 target_link_libraries(tests PRIVATE ${PLATFORM_LIBRARIES} catch2 nihstro-headers Threads::Threads)
 
 if (ENABLE_LIBRETRO)

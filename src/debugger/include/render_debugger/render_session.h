@@ -221,8 +221,7 @@ struct Capture {
 };
 
 struct CaptureLimits {
-    u64 total_bytes{1ULL << 30};
-    std::size_t timeline_entries{1'000'000};
+    std::size_t timeline_entries{4096};
     std::size_t register_writes{1U << 20};
     std::size_t draws{1U << 16};
     std::size_t shaders{1U << 16};
@@ -234,7 +233,6 @@ struct CaptureLimits {
 class RenderSession {
 public:
     static constexpr u32 Latest = std::numeric_limits<u32>::max();
-    static constexpr std::size_t MaxEntries = 4096;
 
     void SetRenderTarget(RenderTarget target);
     RenderTarget GetRenderTarget() const;
@@ -317,7 +315,7 @@ public:
     static constexpr u64 LiveSessionId = 1;
     static constexpr std::size_t MaxImportedSessions = 16;
 
-    RenderSessionManager();
+    RenderSessionManager(std::string producer, std::string backend);
     std::shared_ptr<RenderSession> GetLive() const;
     std::shared_ptr<RenderSession> Get(u64 id) const;
     std::shared_ptr<RenderSession> GetActive() const;

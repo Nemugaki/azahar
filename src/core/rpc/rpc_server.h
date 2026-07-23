@@ -17,6 +17,10 @@ namespace Core {
 class System;
 }
 
+namespace Debugger {
+class RenderSessionManager;
+}
+
 namespace Core::RPC {
 
 class Packet;
@@ -24,7 +28,8 @@ struct PacketHeader;
 
 class RPCServer {
 public:
-    RPCServer(Core::System& system, EmulationControlHandler emulation_control_handler);
+    RPCServer(Core::System& system, EmulationControlHandler emulation_control_handler,
+              std::shared_ptr<Debugger::RenderSessionManager> render_sessions);
     ~RPCServer();
 
     void QueueRequest(std::unique_ptr<RPC::Packet> request);
@@ -78,6 +83,7 @@ private:
     std::jthread request_handler_thread;
     std::jthread wait_request_handler_thread;
     EmulationControlHandler emulation_control_handler;
+    std::shared_ptr<Debugger::RenderSessionManager> render_sessions;
     u32 selected_pid = 0xFFFFFFFF;
     std::vector<u8> pica_trace_data;
     u32 pica_trace_generation = 0;
