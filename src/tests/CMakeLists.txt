@@ -9,6 +9,7 @@ add_executable(tests
     core/memory/vm_manager.cpp
     core/tracer/recorder.cpp
     debugger/render_session.cpp
+    video_core/render_frame_capture.cpp
     precompiled_headers.h
     audio_core/hle/hle.cpp
     audio_core/hle/source.cpp

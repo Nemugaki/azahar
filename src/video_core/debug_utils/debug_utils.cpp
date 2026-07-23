@@ -166,7 +166,41 @@ void DebugContext::OnFramePresented() {
     Debugger::CaptureLimits limits;
     limits.owned_bytes = static_cast<u64>(Settings::values.debugger_cache_mb.GetValue()) << 20;
     session->SetCaptureLimits(limits);
+
+    std::lock_guard capture_lock{frame_capture_mutex};
+    const auto phase = frame_capture_phase.load();
+    if (phase == FrameCapturePhase::AwaitingStart) {
+        session->Clear();
+    }
     session->RecordFrame();
+    if (phase == FrameCapturePhase::AwaitingStart) {
+        frame_capture_phase = FrameCapturePhase::Capturing;
+    } else if (phase == FrameCapturePhase::Capturing) {
+        Core::System::GetInstance().frame_limiter.SetFrameAdvancing(true);
+        Core::System::GetInstance().SetDebugState(Core::DebugPauseReason::FrameAdvance);
+        frame_capture_phase = FrameCapturePhase::Complete;
+        frame_capture_changed.notify_all();
+    }
+}
+
+bool DebugContext::ArmFrameCapture() {
+    std::lock_guard lock{frame_capture_mutex};
+    if (frame_capture_phase != FrameCapturePhase::Idle) {
+        return false;
+    }
+    frame_capture_phase = FrameCapturePhase::AwaitingStart;
+    return true;
+}
+
+bool DebugContext::WaitForFrameCapture(std::chrono::milliseconds timeout) {
+    std::unique_lock lock{frame_capture_mutex};
+    return frame_capture_changed.wait_for(
+        lock, timeout, [this] { return frame_capture_phase == FrameCapturePhase::Complete; });
+}
+
+void DebugContext::FinishFrameCapture() {
+    std::lock_guard lock{frame_capture_mutex};
+    frame_capture_phase = FrameCapturePhase::Idle;
 }
 
 void DebugContext::SetBreakpointCondition(Event event, BreakPointCondition condition) {

@@ -529,47 +529,55 @@ void RPCServer::HandleRenderDebug(Packet& packet, RenderDebugOperation operation
             SendError(packet, Error::Busy);
             return;
         }
-        const auto before = system.GetDebugState();
-        if (before.reason == Core::DebugPauseReason::Stopped ||
-            before.reason == Core::DebugPauseReason::Running) {
-            SendError(packet, Error::InvalidState);
-            return;
-        }
-        const auto live = sessions->GetLive();
-        live->SetOutputCaptureEnabled(Debugger::RenderSession::CaptureOwner::RPC, true);
-        const auto release_capture = [&] {
-            live->SetOutputCaptureEnabled(Debugger::RenderSession::CaptureOwner::RPC, false);
-        };
-        const auto advance = [&] {
-            const auto result =
-                emulation_control_handler(EmulationControl::FrameAdvance, std::string{});
-            if (result.result != EmulationResult::Success) {
-                return false;
-            }
-            const auto deadline = std::chrono::steady_clock::now() +
-                                  std::chrono::milliseconds(std::clamp(timeout_ms, 1U, 60000U));
+        const auto timeout = std::chrono::milliseconds(std::clamp(timeout_ms, 1U, 60000U));
+        const auto deadline = std::chrono::steady_clock::now() + timeout;
+        const auto wait_until_paused = [&] {
             while (!system.frame_limiter.IsWaitingForFrameAdvance() &&
                    std::chrono::steady_clock::now() < deadline) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
             }
             return system.frame_limiter.IsWaitingForFrameAdvance();
         };
-        if ((before.reason == Core::DebugPauseReason::CPU ||
-             before.reason == Core::DebugPauseReason::Pica) &&
-            !advance()) {
+        const auto before =
+            emulation_control_handler(EmulationControl::Status, std::string{});
+        if (before.state == EmulationState::Stopped) {
+            SendError(packet, Error::InvalidState);
+            return;
+        }
+        if (before.state == EmulationState::Running) {
+            const auto paused =
+                emulation_control_handler(EmulationControl::Pause, std::string{});
+            if (paused.result != EmulationResult::Success || !wait_until_paused()) {
+                SendError(packet, Error::Failed);
+                return;
+            }
+        }
+        const auto live = sessions->GetLive();
+        live->SetOutputCaptureEnabled(Debugger::RenderSession::CaptureOwner::RPC, true);
+        const auto release_capture = [&] {
+            context->FinishFrameCapture();
+            live->SetOutputCaptureEnabled(Debugger::RenderSession::CaptureOwner::RPC, false);
+        };
+        if (!context->ArmFrameCapture()) {
+            live->SetOutputCaptureEnabled(Debugger::RenderSession::CaptureOwner::RPC, false);
+            SendError(packet, Error::Busy);
+            return;
+        }
+        const auto resumed =
+            emulation_control_handler(EmulationControl::Resume, std::string{});
+        const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::max(deadline - std::chrono::steady_clock::now(),
+                     std::chrono::steady_clock::duration::zero()));
+        if (resumed.result != EmulationResult::Success ||
+            !context->WaitForFrameCapture(remaining) || !wait_until_paused()) {
+            emulation_control_handler(EmulationControl::Pause, std::string{});
             release_capture();
             SendError(packet, Error::Failed);
             return;
         }
-        live->Clear();
-        if (!advance()) {
-            release_capture();
-            SendError(packet, Error::Failed);
-            return;
-        }
-        release_capture();
         Debugger::Capture capture;
         live->Snapshot(capture);
+        release_capture();
         capture.producer = std::string{"Azahar "} + Common::g_scm_rev + " " + Common::g_scm_desc;
         capture.backend = "Pica";
         const auto issues = live->Validate(true);

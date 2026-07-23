@@ -6,6 +6,7 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <iterator>
 #include <list>
@@ -167,6 +168,9 @@ public:
      */
     void OnEvent(Event event, const void* data) {
         // This check is left in the header to allow the compiler to inline it.
+        if (frame_capture_phase != FrameCapturePhase::Idle) {
+            return;
+        }
         if (HandleDrawBreak(event)) {
             return;
         }
@@ -212,6 +216,11 @@ public:
 
     /// Called when the game submits a new top-screen framebuffer.
     void OnFramePresented();
+
+    /// Captures exactly one complete game frame between two presented-frame boundaries.
+    bool ArmFrameCapture();
+    bool WaitForFrameCapture(std::chrono::milliseconds timeout);
+    void FinishFrameCapture();
 
     void SetBreakpoint(Event event, bool enabled) {
         breakpoints[static_cast<int>(event)].enabled = enabled;
@@ -264,6 +273,8 @@ public:
     std::shared_ptr<CiTrace::Recorder> recorder = nullptr;
 
 private:
+    enum class FrameCapturePhase { Idle, AwaitingStart, Capturing, Complete };
+
     bool HandleDrawBreak(Event event);
     bool MatchesCondition(Event event, const void* data);
     /**
@@ -291,6 +302,9 @@ private:
     std::atomic<u32> draw_break_frame_draw{};
     std::atomic<u32> draw_break_color{};
     std::atomic_bool draw_break_filter_color{};
+    std::mutex frame_capture_mutex;
+    std::condition_variable frame_capture_changed;
+    std::atomic<FrameCapturePhase> frame_capture_phase{FrameCapturePhase::Idle};
     std::shared_ptr<Debugger::RenderSessionManager> render_sessions;
 };
 
