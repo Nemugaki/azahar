@@ -31,8 +31,9 @@ class RasterizerInterface;
 }
 
 namespace Debugger {
+enum class CapturePhase : u32;
 struct DrawInfo;
-}
+} // namespace Debugger
 
 namespace Pica {
 
@@ -155,6 +156,7 @@ private:
 
     void RecordDebuggerDraw(const Debugger::DrawInfo& info, bool is_indexed, bool capture_geometry);
     void RecordDebuggerOutput();
+    void RecordDebuggerOutput(Debugger::CapturePhase phase);
 
     void LoadVertices(bool is_indexed);
 

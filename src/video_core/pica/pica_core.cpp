@@ -777,7 +777,8 @@ void PicaCore::DrawArrays(bool is_indexed) {
 
 void PicaCore::RecordDebuggerDraw(const Debugger::DrawInfo& info, bool is_indexed,
                                   bool capture_geometry) {
-    if (!debug_context->GetRenderSession()->IsCaptureEnabled()) {
+    const auto session = debug_context->GetRenderSession();
+    if (!session->IsCaptureEnabled()) {
         return;
     }
     Debugger::Shader shader;
@@ -800,8 +801,7 @@ void PicaCore::RecordDebuggerDraw(const Debugger::DrawInfo& info, bool is_indexe
     std::array<std::array<u8, 4>, 7> output_map{};
     for (std::size_t reg = 0; reg != float_uniforms.size(); ++reg)
         for (std::size_t component = 0; component != 4; ++component)
-            float_uniforms[reg][component] =
-                vs_setup.uniforms.f[reg][component].ToFloat32();
+            float_uniforms[reg][component] = vs_setup.uniforms.f[reg][component].ToFloat32();
     for (std::size_t reg = 0; reg != integer_uniforms.size(); ++reg)
         for (std::size_t component = 0; component != 4; ++component)
             integer_uniforms[reg][component] = vs_setup.uniforms.i[reg][component];
@@ -811,14 +811,12 @@ void PicaCore::RecordDebuggerDraw(const Debugger::DrawInfo& info, bool is_indexe
             fixed_attributes[attribute][component] =
                 input_default_attributes[attribute][component].ToFloat32();
         fixed_written[attribute] = true;
-        input_map[attribute] =
-            static_cast<u8>(regs.internal.vs.GetRegisterForAttribute(attribute));
+        input_map[attribute] = static_cast<u8>(regs.internal.vs.GetRegisterForAttribute(attribute));
     }
     for (std::size_t reg = 0; reg != output_map.size(); ++reg) {
         const u32 raw = regs.internal.rasterizer.vs_output_attributes[reg].raw;
         for (std::size_t component = 0; component != 4; ++component)
-            output_map[reg][component] = static_cast<u8>(
-                (raw >> (component * 8)) & 0x1f);
+            output_map[reg][component] = static_cast<u8>((raw >> (component * 8)) & 0x1f);
     }
     append_state(float_uniforms);
     append_state(integer_uniforms);
@@ -830,29 +828,31 @@ void PicaCore::RecordDebuggerDraw(const Debugger::DrawInfo& info, bool is_indexe
 
     std::vector<Debugger::ResourceView> resources;
     resources.reserve(8);
-    const auto add_resource = [&](Debugger::ResourceRole role, u32 slot, PAddr address, u32 format,
-                                  u32 width, u32 height, u32 stride, u64 size) {
-        if (size > std::numeric_limits<u32>::max()) {
-            return;
-        }
-        const u8* data = size ? memory.GetPhysicalPointer(address) : nullptr;
-        if (data || !size) {
-            resources.push_back({role,
-                                 slot,
-                                 address,
-                                 format,
-                                 width,
-                                 height,
-                                 stride,
-                                 {data, static_cast<u32>(size)}});
-        }
-    };
-
-    const auto target = debug_context->GetRenderSession()->GetRenderTarget();
-    add_resource(Debugger::ResourceRole::ColorTarget, 0, target.color_address, target.color_format,
-                 target.width, target.height, 0, 0);
-    add_resource(Debugger::ResourceRole::DepthTarget, 0, target.depth_address, target.depth_format,
-                 target.width, target.height, 0, 0);
+    const auto add_resource =
+        [&](Debugger::ResourceRole role, u32 slot, PAddr address, u32 format, u32 width, u32 height,
+            u32 stride, u64 size,
+            Debugger::ResourceTiling tiling = Debugger::ResourceTiling::Linear,
+            Debugger::ResourceOrigin origin = Debugger::ResourceOrigin::TopLeft) {
+            if (!size || size > std::numeric_limits<u32>::max()) {
+                session->RecordGap(role, slot, "referenced resource has invalid size");
+                return;
+            }
+            const u8* data = memory.GetPhysicalPointer(address);
+            if (data) {
+                resources.push_back({role,
+                                     slot,
+                                     address,
+                                     format,
+                                     width,
+                                     height,
+                                     stride,
+                                     tiling,
+                                     origin,
+                                     {data, static_cast<u32>(size)}});
+            } else {
+                session->RecordGap(role, slot, "referenced resource is unavailable");
+            }
+        };
 
     if (capture_geometry) {
         const auto& pipeline = regs.internal.pipeline;
@@ -864,8 +864,10 @@ void PicaCore::RecordDebuggerDraw(const Debugger::DrawInfo& info, bool is_indexe
             const u32 size = pipeline.num_vertices * index_size;
             const PAddr address = base_address + index_info.offset;
             const u8* indices = memory.GetPhysicalPointer(address);
-            add_resource(Debugger::ResourceRole::IndexBuffer, 0, address, index_info.format, 0, 0,
-                         index_size, size);
+            if (size) {
+                add_resource(Debugger::ResourceRole::IndexBuffer, 0, address, index_info.format, 0,
+                             0, index_size, size);
+            }
             maximum_vertex = 0;
             if (indices) {
                 for (u32 index = 0; index < pipeline.num_vertices; ++index) {
@@ -878,7 +880,7 @@ void PicaCore::RecordDebuggerDraw(const Debugger::DrawInfo& info, bool is_indexe
         }
         u32 slot{};
         for (const auto& loader : pipeline.vertex_attributes.attribute_loaders) {
-            if (loader.component_count && loader.byte_count) {
+            if (loader.component_count && loader.byte_count && maximum_vertex) {
                 const PAddr address = base_address + loader.data_offset;
                 add_resource(Debugger::ResourceRole::VertexBuffer, slot, address, 0, 0, 0,
                              loader.byte_count,
@@ -895,14 +897,20 @@ void PicaCore::RecordDebuggerDraw(const Debugger::DrawInfo& info, bool is_indexe
             add_resource(
                 Debugger::ResourceRole::Texture, texture_slot, texture.config.GetPhysicalAddress(),
                 static_cast<u32>(texture.format), texture.config.width, texture.config.height, 0,
-                static_cast<u64>(nibbles) * texture.config.width / 2 * texture.config.height);
+                static_cast<u64>(nibbles) * texture.config.width / 2 * texture.config.height,
+                Debugger::ResourceTiling::PicaTiled);
         }
         ++texture_slot;
     }
-    debug_context->OnDraw(info, shader, resources);
+    debug_context->OnDraw(info, shader, resources, regs.internal.reg_array);
+    RecordDebuggerOutput(Debugger::CapturePhase::PreDraw);
 }
 
 void PicaCore::RecordDebuggerOutput() {
+    RecordDebuggerOutput(Debugger::CapturePhase::PostDraw);
+}
+
+void PicaCore::RecordDebuggerOutput(Debugger::CapturePhase phase) {
     if (!debug_context) {
         return;
     }
@@ -933,7 +941,10 @@ void PicaCore::RecordDebuggerOutput() {
                            width,
                            height,
                            stride,
-                           {bytes, static_cast<u32>(size)}});
+                           Debugger::ResourceTiling::PicaTiled,
+                           Debugger::ResourceOrigin::BottomLeft,
+                           {bytes, static_cast<u32>(size)}},
+                          phase);
 }
 
 void PicaCore::LoadVertices(bool is_indexed) {

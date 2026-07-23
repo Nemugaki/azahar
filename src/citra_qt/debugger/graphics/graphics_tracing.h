@@ -81,6 +81,7 @@ private:
     QPushButton* open_depth_target;
     QComboBox* session_selector;
     QPushButton* remove_capture;
+    QPushButton* load_older;
     std::vector<Debugger::TimelineEntry> displayed_entries;
     std::vector<QTreeWidgetItem*> displayed_draw_items;
     std::optional<Debugger::RenderTarget> selected_target;
@@ -88,4 +89,5 @@ private:
     Debugger::TimelineStatus displayed_status{};
     Debugger::u64 displayed_session_id{};
     bool have_displayed_status{};
+    Debugger::u32 displayed_limit{128};
 };

@@ -32,6 +32,7 @@ enum class PacketType : u32 {
     DebugCapture = 16,
     RenderSession = 17,
     RenderOutput = 18,
+    RenderDebug = 19,
 };
 
 enum class EmulationControl : u32 {
@@ -123,6 +124,19 @@ enum class RenderSessionOperation : u32 {
 
 enum class RenderOutputOperation : u32 { Status = 0, Read = 1 };
 
+enum class RenderDebugOperation : u32 {
+    Capabilities = 0,
+    CaptureFrame = 1,
+    Timeline = 2,
+    State = 3,
+    Validate = 4,
+    OutputStatus = 5,
+    OutputRead = 6,
+    Diff = 7,
+    Vertex = 8,
+    DrawBreak = 9,
+};
+
 enum class Error : u32 {
     InvalidPacket = 1,
     PermissionDenied = 2,
@@ -140,7 +154,7 @@ struct ErrorReply {
 };
 
 struct CapabilitiesReply {
-    u32 protocol_version;
+    u32 protocol_magic;
     u32 capabilities;
     u32 max_packet_data_size;
     u32 build_id_size;
@@ -223,6 +237,7 @@ struct PicaTimelineEntry {
     u32 kind;
     u32 frame;
     u32 draw;
+    u32 frame_draw;
     u32 changed_mask;
     PicaRenderTargetReply target;
     u32 draw_mode;
@@ -231,7 +246,7 @@ struct PicaTimelineEntry {
     u32 vertex_offset;
     u32 vertex_shader_entry;
 };
-static_assert(sizeof(PicaTimelineEntry) == 0x40);
+static_assert(sizeof(PicaTimelineEntry) == 0x44);
 
 struct PicaTimelineStatus {
     u32 count;
@@ -261,6 +276,92 @@ struct RenderOutputReply {
 };
 static_assert(sizeof(RenderOutputReply) == 0x28);
 
+struct RenderDebugCapabilitiesReply {
+    u64 capture_capabilities;
+    u32 max_packet_data_size;
+    u32 build_id_size;
+};
+
+struct RenderCaptureReply {
+    u64 session_id;
+    u32 timeline_count;
+    u32 issue_count;
+    u32 complete;
+    u32 truncated;
+};
+
+struct RenderTimelinePageReply {
+    u64 epoch;
+    u32 next_sequence;
+    u32 count;
+    u32 flags;
+};
+
+struct RenderStatePageReply {
+    u32 total;
+    u32 start;
+    u32 count;
+};
+
+struct RenderValidationIssueReply {
+    u32 kind;
+    u32 frame;
+    u32 draw;
+    u32 role;
+    u32 slot;
+    std::array<char, 76> message;
+};
+static_assert(sizeof(RenderValidationIssueReply) == 0x60);
+
+struct RenderOutputInfoReply {
+    u64 session_id;
+    u32 sequence;
+    u32 phase;
+    u64 address;
+    u32 format;
+    u32 width;
+    u32 height;
+    u32 stride;
+    u32 tiling;
+    u32 origin;
+    u32 size;
+    u32 reserved;
+};
+static_assert(sizeof(RenderOutputInfoReply) == 0x38);
+
+struct RenderDiffReply {
+    u32 changed_mask;
+    u32 changed_registers;
+    u32 changed_resources;
+    u32 changed_pixels;
+    u32 min_x;
+    u32 min_y;
+    u32 max_x;
+    u32 max_y;
+};
+
+struct RenderDrawBreakReply {
+    u32 phase;
+    u32 frame_draw;
+    u32 color_address;
+    u32 filter_color;
+};
+
+struct RenderVertexReply {
+    u32 ordinal;
+    u32 resolved_index;
+    u32 loaded_mask;
+    u32 fixed_mask;
+    u32 shader_entry;
+    u32 reserved;
+    u64 shader_id;
+    std::array<u8, 16> input_map;
+    std::array<f32, 16 * 4> input;
+    std::array<f32, 16 * 4> output;
+    std::array<f32, 24> semantic;
+};
+static_assert(sizeof(RenderVertexReply) == 0x290);
+
 struct PicaTraceReply {
     u32 active;
     u32 generation;
@@ -285,7 +386,7 @@ using EmulationControlHandler =
     std::function<EmulationControlReply(EmulationControl, const std::string&)>;
 
 struct PacketHeader {
-    u32 version;
+    u32 magic;
     u32 id;
     PacketType packet_type;
     u32 packet_size;
@@ -300,7 +401,7 @@ struct ProcessInfo {
 static_assert(sizeof(ProcessInfo) == 0x14, "Incorrect ProcessInfo size");
 #pragma pack(pop)
 
-constexpr u32 CURRENT_VERSION = 2;
+constexpr u32 PROTOCOL_MAGIC = 0x525A4841;    // "AHZR" on little-endian hosts.
 constexpr u32 ERROR_REPLY_MAGIC = 0x52504345; // "ECPR" on little-endian hosts.
 constexpr u32 MIN_PACKET_SIZE = sizeof(PacketHeader);
 constexpr u32 MAX_PACKET_DATA_SIZE = 1024;
@@ -326,6 +427,7 @@ constexpr u32 CAPABILITY_ERROR_REPLIES = 1U << 15;
 constexpr u32 CAPABILITY_REQUEST_DEDUPLICATION = 1U << 16;
 constexpr u32 CAPABILITY_RENDER_SESSIONS = 1U << 17;
 constexpr u32 CAPABILITY_RENDER_OUTPUTS = 1U << 18;
+constexpr u32 CAPABILITY_RENDER_DEBUG = 1U << 19;
 
 class Packet {
 public:
@@ -333,8 +435,8 @@ public:
                     std::function<void(Packet&)> send_reply_callback);
     ~Packet();
 
-    u32 GetVersion() const {
-        return header.version;
+    u32 GetMagic() const {
+        return header.magic;
     }
 
     u32 GetId() const {

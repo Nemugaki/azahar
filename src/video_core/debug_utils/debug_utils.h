@@ -121,6 +121,13 @@ public:
         bool at_breakpoint;
     };
 
+    struct DrawBreakState {
+        u32 phase;
+        u32 frame_draw;
+        u32 color_address;
+        bool filter_color;
+    };
+
     enum class ConditionField : u32 {
         None = 0,
         EventData = 1,
@@ -160,6 +167,9 @@ public:
      */
     void OnEvent(Event event, const void* data) {
         // This check is left in the header to allow the compiler to inline it.
+        if (HandleDrawBreak(event)) {
+            return;
+        }
         auto& breakpoint = breakpoints[static_cast<int>(event)];
         if (!breakpoints_enabled || ignore_breakpoints_until_frame || !breakpoint.enabled ||
             !MatchesCondition(event, data))
@@ -183,7 +193,8 @@ public:
     /// Records an ordered draw call and emits the matching debugger event.
     void OnDraw(const Debugger::DrawInfo& info);
     void OnDraw(const Debugger::DrawInfo& info, const Debugger::Shader& shader,
-                std::span<const Debugger::ResourceView> resources);
+                std::span<const Debugger::ResourceView> resources,
+                std::span<const u32, 0x300> registers);
     void OnRegisterWrite(Debugger::RegisterWrite write);
 
     /**
@@ -224,6 +235,9 @@ public:
     }
 
     BreakPointState GetBreakpointState();
+    void ArmDrawBreak(u32 frame_draw, std::optional<u32> color_address);
+    void CancelDrawBreak();
+    DrawBreakState GetDrawBreakState() const;
     std::optional<AttributeBuffer> GetVertexInput();
 
     /**
@@ -247,6 +261,7 @@ public:
     std::shared_ptr<CiTrace::Recorder> recorder = nullptr;
 
 private:
+    bool HandleDrawBreak(Event event);
     bool MatchesCondition(Event event, const void* data);
     /**
      * Private default constructor to make sure people always construct this through Construct()
@@ -269,6 +284,10 @@ private:
     bool vertex_input_valid{};
     std::atomic_bool ignore_breakpoints_until_frame = false;
     std::array<BreakPointCondition, static_cast<int>(Event::NumEvents)> breakpoint_conditions{};
+    std::atomic<u32> draw_break_phase{};
+    std::atomic<u32> draw_break_frame_draw{};
+    std::atomic<u32> draw_break_color{};
+    std::atomic_bool draw_break_filter_color{};
     std::shared_ptr<Debugger::RenderSessionManager> render_sessions;
 };
 

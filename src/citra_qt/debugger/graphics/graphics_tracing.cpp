@@ -6,6 +6,7 @@
 #include <array>
 #include <iterator>
 #include <memory>
+#include <DockManager.h>
 #include <QBoxLayout>
 #include <QCheckBox>
 #include <QComboBox>
@@ -27,7 +28,6 @@
 #include <QSplitter>
 #include <QTimer>
 #include <QTreeWidget>
-#include <DockManager.h>
 #include <nihstro/float24.h>
 #include "citra_qt/debugger/dock_workspace.h"
 #include "citra_qt/debugger/graphics/graphics_surface.h"
@@ -124,8 +124,8 @@ GraphicsTracingWidget::GraphicsTracingWidget(Core::System& system_,
     frame_limit->setSuffix(tr(" frames"));
     frame_limit->setAccessibleName(tr("Maximum retained render timeline frames"));
     frame_limit->setToolTip(
-        tr("Keeps metadata for this many recent frames, up to 4096 events. Oldest entries are "
-           "evicted; rich draw data is bounded by the debugger cache limit."));
+        tr("Keeps metadata for this many recent frames. Rich draw data is bounded by the "
+           "debugger cache limit."));
     follow_live = new QCheckBox(tr("Follow Live"));
     follow_live->setChecked(true);
     freeze_timeline = new QCheckBox(tr("Freeze"));
@@ -148,6 +148,12 @@ GraphicsTracingWidget::GraphicsTracingWidget(Core::System& system_,
     timeline->setAccessibleName(tr("Ordered Pica draw-call timeline"));
     timeline->header()->setStretchLastSection(false);
     timeline->header()->setSectionResizeMode(0, QHeaderView::Stretch);
+    load_older = new QPushButton(tr("Load 128 older events"));
+    connect(load_older, &QPushButton::clicked, this, [this] {
+        displayed_limit += 128;
+        have_displayed_status = false;
+        RefreshTimeline();
+    });
     event_slider = new QSlider(Qt::Horizontal);
     event_slider->setRange(0, 0);
     event_slider->setEnabled(false);
@@ -159,8 +165,7 @@ GraphicsTracingWidget::GraphicsTracingWidget(Core::System& system_,
     timeline_details = new QLabel(tr("Select a draw call to inspect it."));
     timeline_details->setWordWrap(true);
     timeline_details->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    output_preview = new ScaledPixmapLabel(
-        tr("Select a draw call to view its captured output."));
+    output_preview = new ScaledPixmapLabel(tr("Select a draw call to view its captured output."));
     output_preview->setAlignment(Qt::AlignCenter);
     output_preview->setMinimumSize(0, 0);
     output_preview->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
@@ -250,6 +255,7 @@ GraphicsTracingWidget::GraphicsTracingWidget(Core::System& system_,
     timeline_controls->addWidget(freeze_timeline);
     timeline_controls->addWidget(refresh_timeline);
     main_layout->addLayout(timeline_controls);
+    main_layout->addWidget(load_older);
     auto* session_controls = new QHBoxLayout;
     auto* session_label = new QLabel(tr("Session:"));
     session_selector = new QComboBox;
@@ -457,12 +463,14 @@ void GraphicsTracingWidget::RefreshTimeline() {
     const int old_scroll = scroll_bar->value();
     const bool was_at_bottom = old_scroll >= scroll_bar->maximum();
 
-    displayed_entries = session->Query({.start = Debugger::RenderSession::Latest, .count = 4096});
+    displayed_entries =
+        session->Query({.start = Debugger::RenderSession::Latest, .count = displayed_limit});
     if (displayed_session_id != session_id) {
         displayed_output_sequence.reset();
     }
     displayed_session_id = session_id;
     displayed_status = session->GetStatus();
+    load_older->setVisible(displayed_entries.size() < displayed_status.count);
     have_displayed_status = true;
     timeline->clear();
     displayed_draw_items.clear();
@@ -663,6 +671,13 @@ void GraphicsTracingWidget::SelectTimelineEntry(QTreeWidgetItem* current) {
                          : tr("unavailable"))
                 .arg(draw_details->resource_count));
     }
+    if (const auto state = render_sessions->GetActive()->GetDrawState(entry.sequence)) {
+        const auto nonzero = std::ranges::count_if(*state, [](u32 value) { return value != 0; });
+        timeline_details->setText(timeline_details->text() +
+                                  tr("\nImmutable PICA state: %1 registers (%2 nonzero)")
+                                      .arg(state->size())
+                                      .arg(nonzero));
+    }
     const bool live = render_sessions && render_sessions->GetActiveId() ==
                                              Debugger::RenderSessionManager::LiveSessionId;
     open_color_target->setEnabled(live && entry.target.color_address != 0);
@@ -689,8 +704,9 @@ void GraphicsTracingWidget::SelectEvent(int event) {
 
 void GraphicsTracingWidget::UpdateOutputCaptureState() {
     render_sessions->GetLive()->SetOutputCaptureEnabled(
+        Debugger::RenderSession::CaptureOwner::UserInterface,
         isVisible() && Debugger::IsDockActive(this) &&
-        render_sessions->GetActiveId() == Debugger::RenderSessionManager::LiveSessionId);
+            render_sessions->GetActiveId() == Debugger::RenderSessionManager::LiveSessionId);
 }
 
 void GraphicsTracingWidget::UpdateOutput(Debugger::u32 sequence) {
@@ -821,6 +837,10 @@ void GraphicsTracingWidget::RefreshSessions(Debugger::u64 selected) {
     }
     if (!selected) {
         selected = render_sessions->GetActiveId();
+    }
+    if (selected != displayed_session_id) {
+        displayed_limit = 128;
+        have_displayed_status = false;
     }
     const QSignalBlocker blocker{session_selector};
     session_selector->clear();

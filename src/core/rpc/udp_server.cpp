@@ -106,7 +106,7 @@ private:
             LOG_WARNING(RPC_Server, "Failed to send reply: {}", error.message());
         } else {
             LOG_INFO(RPC_Server, "Sent reply version({}) id=({}) type=({}) size=({})",
-                     reply_packet.GetVersion(), reply_packet.GetId(), reply_packet.GetPacketType(),
+                     reply_packet.GetMagic(), reply_packet.GetId(), reply_packet.GetPacketType(),
                      reply_packet.GetPacketDataSize());
         }
     }
@@ -115,7 +115,7 @@ private:
                          const boost::asio::ip::udp::endpoint& endpoint) {
         std::lock_guard lock{reply_cache_mutex};
         const auto reply = std::ranges::find_if(reply_cache, [&](const auto& entry) {
-            return entry.endpoint == endpoint && entry.header.version == header.version &&
+            return entry.endpoint == endpoint && entry.header.magic == header.magic &&
                    entry.header.id == header.id && entry.header.packet_type == header.packet_type;
         });
         if (reply == reply_cache.end()) {

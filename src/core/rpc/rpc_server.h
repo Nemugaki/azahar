@@ -6,6 +6,7 @@
 
 #include <condition_variable>
 #include <memory>
+#include <mutex>
 #include <span>
 #include <vector>
 #include "common/polyfill_thread.h"
@@ -59,6 +60,8 @@ private:
                              u32 count, const std::string& path);
     void HandleRenderOutput(Packet& packet, RenderOutputOperation operation, u64 session_id,
                             u32 sequence, u32 offset, u32 count);
+    void HandleRenderDebug(Packet& packet, RenderDebugOperation operation,
+                           std::span<const u8> request);
     u32 GetEnabledCapabilities() const;
     bool IsPacketTypeEnabled(PacketType packet_type) const;
     bool IsEmulationControlEnabled(EmulationControl operation) const;
@@ -84,6 +87,7 @@ private:
     std::vector<PicaShaderCycle> pica_shader_cycles;
     u32 pica_shader_generation = 0;
     bool pica_shader_vertex_input_valid = false;
+    std::mutex render_capture_mutex;
 };
 
 } // namespace Core::RPC

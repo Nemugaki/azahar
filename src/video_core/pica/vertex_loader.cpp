@@ -9,7 +9,11 @@
 namespace Pica {
 
 VertexLoader::VertexLoader(Memory::MemorySystem& memory_, const PipelineRegs& regs)
-    : memory{memory_} {
+    : VertexLoader(
+          [&memory_](PAddr address, std::size_t) { return memory_.GetPhysicalPointer(address); },
+          regs) {}
+
+VertexLoader::VertexLoader(ReadCallback read_, const PipelineRegs& regs) : read{std::move(read_)} {
     const auto& attribute_config = regs.vertex_attributes;
     num_total_attributes = attribute_config.GetNumTotalAttributes();
 
@@ -61,7 +65,7 @@ VertexLoader::VertexLoader(Memory::MemorySystem& memory_, const PipelineRegs& re
 
 VertexLoader::~VertexLoader() = default;
 
-void VertexLoader::LoadVertex(PAddr base_address, u32 index, u32 vertex, AttributeBuffer& input,
+bool VertexLoader::LoadVertex(PAddr base_address, u32 index, u32 vertex, AttributeBuffer& input,
                               AttributeBuffer& input_default_attributes) const {
     for (s32 i = 0; i < num_total_attributes; ++i) {
         // Load the default attribute if we're configured to do so
@@ -84,16 +88,20 @@ void VertexLoader::LoadVertex(PAddr base_address, u32 index, u32 vertex, Attribu
 
         switch (vertex_attribute_formats[i]) {
         case PipelineRegs::VertexAttributeFormat::BYTE:
-            LoadAttribute<s8>(source_addr, i, input);
+            if (!LoadAttribute<s8>(source_addr, i, input))
+                return false;
             break;
         case PipelineRegs::VertexAttributeFormat::UBYTE:
-            LoadAttribute<u8>(source_addr, i, input);
+            if (!LoadAttribute<u8>(source_addr, i, input))
+                return false;
             break;
         case PipelineRegs::VertexAttributeFormat::SHORT:
-            LoadAttribute<s16>(source_addr, i, input);
+            if (!LoadAttribute<s16>(source_addr, i, input))
+                return false;
             break;
         case PipelineRegs::VertexAttributeFormat::FLOAT:
-            LoadAttribute<f32>(source_addr, i, input);
+            if (!LoadAttribute<f32>(source_addr, i, input))
+                return false;
             break;
         }
 
@@ -104,6 +112,7 @@ void VertexLoader::LoadVertex(PAddr base_address, u32 index, u32 vertex, Attribu
             input[i][comp] = comp == 3 ? f24::One() : f24::Zero();
         }
     }
+    return true;
 }
 
 } // namespace Pica

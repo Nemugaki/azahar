@@ -2,6 +2,7 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
+#include "common/hash.h"
 #include "common/logging/log.h"
 #include "common/scm_rev.h"
 #include "common/settings.h"
@@ -16,6 +17,14 @@
 #include "video_core/gpu.h"
 #include "video_core/gpu_debugger.h"
 #include "video_core/pica/pica_core.h"
+#include "video_core/pica/regs_internal.h"
+#include "video_core/pica/shader_setup.h"
+#include "video_core/pica/shader_unit.h"
+#include "video_core/pica/vertex_loader.h"
+#include "video_core/shader/shader_interpreter.h"
+
+#include <chrono>
+#include <thread>
 
 namespace Core::RPC {
 
@@ -168,13 +177,15 @@ void RPCServer::HandleSetGetProcess(Packet& packet, u32 operation, u32 process_i
 }
 
 void RPCServer::HandleCapabilities(Packet& packet) {
+    const std::string build =
+        std::string{Common::g_scm_rev} + " " + std::string{Common::g_scm_desc};
     const u32 build_size =
-        std::min(static_cast<u32>(std::strlen(Common::g_scm_rev)),
+        std::min(static_cast<u32>(build.size()),
                  static_cast<u32>(MAX_PACKET_DATA_SIZE - sizeof(CapabilitiesReply)));
-    const CapabilitiesReply response{CURRENT_VERSION, GetEnabledCapabilities(),
-                                     MAX_PACKET_DATA_SIZE, build_size};
+    const CapabilitiesReply response{PROTOCOL_MAGIC, GetEnabledCapabilities(), MAX_PACKET_DATA_SIZE,
+                                     build_size};
     std::memcpy(packet.GetPacketData().data(), &response, sizeof(response));
-    std::memcpy(packet.GetPacketData().data() + sizeof(response), Common::g_scm_rev, build_size);
+    std::memcpy(packet.GetPacketData().data() + sizeof(response), build.data(), build_size);
     packet.SetPacketDataSize(sizeof(response) + build_size);
     packet.SendReply();
 }
@@ -234,7 +245,7 @@ u32 RPCServer::GetEnabledCapabilities() const {
     }
     if (Settings::values.pica_debugging.GetValue() &&
         Settings::values.rpc_allow_render_captures.GetValue()) {
-        capabilities |= CAPABILITY_RENDER_OUTPUTS;
+        capabilities |= CAPABILITY_RENDER_OUTPUTS | CAPABILITY_RENDER_DEBUG;
     }
     return capabilities;
 }
@@ -277,6 +288,8 @@ bool RPCServer::IsPacketTypeEnabled(PacketType packet_type) const {
         return capabilities & CAPABILITY_RENDER_SESSIONS;
     case PacketType::RenderOutput:
         return capabilities & CAPABILITY_RENDER_OUTPUTS;
+    case PacketType::RenderDebug:
+        return capabilities & CAPABILITY_RENDER_DEBUG;
     default:
         return false;
     }
@@ -407,20 +420,15 @@ void RPCServer::HandleRenderOutput(Packet& packet, RenderOutputOperation operati
             SendError(packet, Error::NotFound);
             return;
         }
-        const RenderOutputReply reply{session_id,
-                                      sequence,
-                                      output->format,
-                                      output->address,
-                                      output->width,
-                                      output->height,
-                                      output->stride,
-                                      static_cast<u32>(output->bytes.size())};
+        const RenderOutputReply reply{
+            session_id,    sequence,       output->format, output->address,
+            output->width, output->height, output->stride, static_cast<u32>(output->bytes.size())};
         std::memcpy(packet.GetPacketData().data(), &reply, sizeof(reply));
         packet.SetPacketDataSize(sizeof(reply));
         packet.SendReply();
         return;
     }
-    const auto output = session->GetDrawOutput(sequence, offset,
+    const auto output = session->GetDrawOutput(sequence, Debugger::CapturePhase::PostDraw, offset,
                                                std::min(count, MAX_PACKET_DATA_SIZE));
     if (!output) {
         SendError(packet, Error::InvalidArgument);
@@ -429,6 +437,624 @@ void RPCServer::HandleRenderOutput(Packet& packet, RenderOutputOperation operati
     std::memcpy(packet.GetPacketData().data(), output->bytes.data(), output->bytes.size());
     packet.SetPacketDataSize(static_cast<u32>(output->bytes.size()));
     packet.SendReply();
+}
+
+void RPCServer::HandleRenderDebug(Packet& packet, RenderDebugOperation operation,
+                                  std::span<const u8> request) {
+    const auto read_u32 = [&request](std::size_t offset, u32& value) {
+        if (offset + sizeof(value) > request.size()) {
+            return false;
+        }
+        std::memcpy(&value, request.data() + offset, sizeof(value));
+        return true;
+    };
+    const auto read_u64 = [&read_u32](std::size_t offset, u64& value) {
+        u32 low{}, high{};
+        if (!read_u32(offset, low) || !read_u32(offset + sizeof(u32), high)) {
+            return false;
+        }
+        value = low | static_cast<u64>(high) << 32;
+        return true;
+    };
+    const auto context = Pica::g_debug_context;
+    if (!context) {
+        SendError(packet, Error::InvalidState);
+        return;
+    }
+    const auto sessions = context->GetRenderSessions();
+
+    if (operation == RenderDebugOperation::Capabilities) {
+        const std::string build =
+            std::string{Common::g_scm_rev} + " " + std::string{Common::g_scm_desc};
+        const u32 build_size = std::min<u32>(
+            build.size(), MAX_PACKET_DATA_SIZE - sizeof(RenderDebugCapabilitiesReply));
+        const RenderDebugCapabilitiesReply reply{Debugger::Timeline | Debugger::RegisterWrites |
+                                                     Debugger::Resources | Debugger::Shaders |
+                                                     Debugger::RegisterState | Debugger::Outputs,
+                                                 MAX_PACKET_DATA_SIZE, build_size};
+        std::memcpy(packet.GetPacketData().data(), &reply, sizeof(reply));
+        std::memcpy(packet.GetPacketData().data() + sizeof(reply), build.data(), build_size);
+        packet.SetPacketDataSize(sizeof(reply) + build_size);
+        packet.SendReply();
+        return;
+    }
+
+    if (operation == RenderDebugOperation::DrawBreak) {
+        u32 command{}, frame_draw{}, color_address{}, filter_color{};
+        if (!read_u32(sizeof(u32), command) || command > 2) {
+            SendError(packet, Error::InvalidArgument);
+            return;
+        }
+        if (command == 0) {
+            if (!read_u32(2 * sizeof(u32), frame_draw) ||
+                !read_u32(3 * sizeof(u32), color_address) ||
+                !read_u32(4 * sizeof(u32), filter_color) || filter_color > 1 ||
+                frame_draw == std::numeric_limits<u32>::max()) {
+                SendError(packet, Error::InvalidArgument);
+                return;
+            }
+            context->ArmDrawBreak(frame_draw,
+                                  filter_color ? std::optional<u32>{color_address} : std::nullopt);
+        } else if (command == 2) {
+            context->CancelDrawBreak();
+        }
+        const auto state = context->GetDrawBreakState();
+        const RenderDrawBreakReply reply{state.phase, state.frame_draw, state.color_address,
+                                         state.filter_color};
+        std::memcpy(packet.GetPacketData().data(), &reply, sizeof(reply));
+        packet.SetPacketDataSize(sizeof(reply));
+        packet.SendReply();
+        return;
+    }
+
+    if (operation == RenderDebugOperation::CaptureFrame) {
+        u32 timeout_ms{};
+        if (!read_u32(sizeof(u32), timeout_ms) || request.size() <= 2 * sizeof(u32) ||
+            !emulation_control_handler) {
+            SendError(packet, Error::InvalidArgument);
+            return;
+        }
+        const std::string path{reinterpret_cast<const char*>(request.data() + 2 * sizeof(u32)),
+                               request.size() - 2 * sizeof(u32)};
+        if (path.find('\0') != std::string::npos || path.empty()) {
+            SendError(packet, Error::InvalidArgument);
+            return;
+        }
+        std::unique_lock capture_lock{render_capture_mutex, std::try_to_lock};
+        if (!capture_lock.owns_lock()) {
+            SendError(packet, Error::Busy);
+            return;
+        }
+        const auto before = system.GetDebugState();
+        if (before.reason == Core::DebugPauseReason::Stopped ||
+            before.reason == Core::DebugPauseReason::Running) {
+            SendError(packet, Error::InvalidState);
+            return;
+        }
+        const auto live = sessions->GetLive();
+        live->SetOutputCaptureEnabled(Debugger::RenderSession::CaptureOwner::RPC, true);
+        const auto release_capture = [&] {
+            live->SetOutputCaptureEnabled(Debugger::RenderSession::CaptureOwner::RPC, false);
+        };
+        const auto advance = [&] {
+            const auto result =
+                emulation_control_handler(EmulationControl::FrameAdvance, std::string{});
+            if (result.result != EmulationResult::Success) {
+                return false;
+            }
+            const auto deadline = std::chrono::steady_clock::now() +
+                                  std::chrono::milliseconds(std::clamp(timeout_ms, 1U, 60000U));
+            while (!system.frame_limiter.IsWaitingForFrameAdvance() &&
+                   std::chrono::steady_clock::now() < deadline) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+            return system.frame_limiter.IsWaitingForFrameAdvance();
+        };
+        if ((before.reason == Core::DebugPauseReason::CPU ||
+             before.reason == Core::DebugPauseReason::Pica) &&
+            !advance()) {
+            release_capture();
+            SendError(packet, Error::Failed);
+            return;
+        }
+        live->Clear();
+        if (!advance()) {
+            release_capture();
+            SendError(packet, Error::Failed);
+            return;
+        }
+        release_capture();
+        Debugger::Capture capture;
+        live->Snapshot(capture);
+        capture.producer = std::string{"Azahar "} + Common::g_scm_rev + " " + Common::g_scm_desc;
+        capture.backend = "Pica";
+        const auto issues = live->Validate(true);
+        capture.complete &= issues.empty();
+        capture.truncated |= !issues.empty();
+        for (const auto& issue : issues) {
+            if (issue.kind != Debugger::CaptureIssueKind::Gap &&
+                issue.kind != Debugger::CaptureIssueKind::Truncated) {
+                capture.gaps.push_back(
+                    {issue.frame, issue.draw, issue.role, issue.slot, issue.message});
+            }
+        }
+        std::string error;
+        if (!Debugger::SaveCapture(path, capture, error)) {
+            SendError(packet, Error::Failed);
+            return;
+        }
+        const u64 id = sessions->AddImported(std::move(capture));
+        if (!id) {
+            SendError(packet, Error::Failed);
+            return;
+        }
+        const auto session = sessions->Get(id);
+        const auto status = session ? session->GetStatus() : Debugger::TimelineStatus{};
+        const RenderCaptureReply reply{id, status.count, static_cast<u32>(issues.size()),
+                                       issues.empty(), status.truncated};
+        std::memcpy(packet.GetPacketData().data(), &reply, sizeof(reply));
+        packet.SetPacketDataSize(sizeof(reply));
+        packet.SendReply();
+        return;
+    }
+
+    u64 session_id{};
+    if (!read_u64(sizeof(u32), session_id)) {
+        SendError(packet, Error::InvalidArgument);
+        return;
+    }
+    if (!session_id) {
+        session_id = sessions->GetActiveId();
+    }
+    const auto session = sessions->Get(session_id);
+    if (!session) {
+        SendError(packet, Error::NotFound);
+        return;
+    }
+
+    if (operation == RenderDebugOperation::Diff) {
+        u64 other_id{};
+        u32 left_sequence{}, right_sequence{};
+        if (!read_u64(3 * sizeof(u32), other_id) || !read_u32(5 * sizeof(u32), left_sequence) ||
+            !read_u32(6 * sizeof(u32), right_sequence)) {
+            SendError(packet, Error::InvalidArgument);
+            return;
+        }
+        if (!other_id) {
+            other_id = sessions->GetActiveId();
+        }
+        const auto other = sessions->Get(other_id);
+        const auto left_state = session->GetDrawState(left_sequence);
+        const auto right_state = other ? other->GetDrawState(right_sequence) : std::nullopt;
+        if (!left_state || !right_state) {
+            SendError(packet, Error::NotFound);
+            return;
+        }
+        RenderDiffReply reply{};
+        for (std::size_t index = 0; index < left_state->size(); ++index) {
+            reply.changed_registers += (*left_state)[index] != (*right_state)[index];
+        }
+        reply.changed_mask |= reply.changed_registers ? 1U : 0U;
+
+        Debugger::Capture left_capture;
+        Debugger::Capture right_capture;
+        sessions->Snapshot(session_id, left_capture);
+        sessions->Snapshot(other_id, right_capture);
+        const auto find_draw = [](const Debugger::Capture& capture, u32 sequence) {
+            return std::ranges::find_if(capture.draws, [sequence](const auto& draw) {
+                return draw.timeline.sequence == sequence;
+            });
+        };
+        const auto left_draw = find_draw(left_capture, left_sequence);
+        const auto right_draw = find_draw(right_capture, right_sequence);
+        if (left_draw != left_capture.draws.end() && right_draw != right_capture.draws.end()) {
+            reply.changed_mask |=
+                left_draw->timeline.target.color_address !=
+                            right_draw->timeline.target.color_address ||
+                        left_draw->timeline.target.depth_address !=
+                            right_draw->timeline.target.depth_address ||
+                        left_draw->timeline.target.width != right_draw->timeline.target.width ||
+                        left_draw->timeline.target.height != right_draw->timeline.target.height ||
+                        left_draw->timeline.target.color_format !=
+                            right_draw->timeline.target.color_format
+                    ? 2U
+                    : 0U;
+            reply.changed_mask |= left_draw->shader_id != right_draw->shader_id ? 4U : 0U;
+            const auto same_reference = [&](const auto& reference, const auto& draw,
+                                            const auto& capture) {
+                const auto match = std::ranges::find_if(draw.resources, [&](const auto& value) {
+                    return value.role == reference.role && value.slot == reference.slot &&
+                           value.phase == reference.phase;
+                });
+                if (match == draw.resources.end()) {
+                    return false;
+                }
+                const auto left_resource = std::ranges::find_if(
+                    left_capture.resources,
+                    [id = reference.resource_id](const auto& value) { return value.id == id; });
+                const auto right_resource = std::ranges::find_if(
+                    capture.resources,
+                    [id = match->resource_id](const auto& value) { return value.id == id; });
+                return left_resource != left_capture.resources.end() &&
+                       right_resource != capture.resources.end() &&
+                       left_resource->role == right_resource->role &&
+                       left_resource->format == right_resource->format &&
+                       left_resource->width == right_resource->width &&
+                       left_resource->height == right_resource->height &&
+                       left_resource->stride == right_resource->stride &&
+                       left_resource->bytes == right_resource->bytes;
+            };
+            for (const auto& reference : left_draw->resources) {
+                reply.changed_resources += !same_reference(reference, *right_draw, right_capture);
+            }
+            for (const auto& reference : right_draw->resources) {
+                const bool present =
+                    std::ranges::any_of(left_draw->resources, [&](const auto& value) {
+                        return value.role == reference.role && value.slot == reference.slot &&
+                               value.phase == reference.phase;
+                    });
+                reply.changed_resources += !present;
+            }
+            reply.changed_mask |= reply.changed_resources ? 8U : 0U;
+        }
+
+        const auto left_output =
+            session->GetDrawOutput(left_sequence, Debugger::CapturePhase::PostDraw);
+        const auto right_output =
+            other->GetDrawOutput(right_sequence, Debugger::CapturePhase::PostDraw);
+        if (left_output && right_output && left_output->width == right_output->width &&
+            left_output->height == right_output->height &&
+            left_output->stride == right_output->stride) {
+            reply.min_x = left_output->width;
+            reply.min_y = left_output->height;
+            const u32 bytes_per_pixel =
+                left_output->width ? left_output->stride / left_output->width : 0;
+            const std::size_t size =
+                std::min(left_output->bytes.size(), right_output->bytes.size());
+            for (std::size_t offset = 0; bytes_per_pixel && offset < size;
+                 offset += bytes_per_pixel) {
+                const bool changed = !std::equal(left_output->bytes.begin() + offset,
+                                                 left_output->bytes.begin() +
+                                                     std::min(size, offset + bytes_per_pixel),
+                                                 right_output->bytes.begin() + offset);
+                if (!changed) {
+                    continue;
+                }
+                ++reply.changed_pixels;
+                const u32 pixel = static_cast<u32>(offset / bytes_per_pixel);
+                const u32 x = pixel % left_output->width;
+                const u32 y = pixel / left_output->width;
+                reply.min_x = std::min(reply.min_x, x);
+                reply.min_y = std::min(reply.min_y, y);
+                reply.max_x = std::max(reply.max_x, x);
+                reply.max_y = std::max(reply.max_y, y);
+            }
+            if (!reply.changed_pixels) {
+                reply.min_x = reply.min_y = reply.max_x = reply.max_y = 0;
+            }
+            reply.changed_mask |= reply.changed_pixels ? 16U : 0U;
+        } else if (left_output || right_output) {
+            reply.changed_mask |= 16U;
+            reply.changed_pixels = std::numeric_limits<u32>::max();
+        }
+        std::memcpy(packet.GetPacketData().data(), &reply, sizeof(reply));
+        packet.SetPacketDataSize(sizeof(reply));
+        packet.SendReply();
+        return;
+    }
+
+    if (operation == RenderDebugOperation::Vertex) {
+        u32 sequence{}, ordinal{};
+        if (!read_u32(3 * sizeof(u32), sequence) || !read_u32(4 * sizeof(u32), ordinal)) {
+            SendError(packet, Error::InvalidArgument);
+            return;
+        }
+        Debugger::Capture capture;
+        if (!sessions->Snapshot(session_id, capture)) {
+            SendError(packet, Error::NotFound);
+            return;
+        }
+        const auto draw = std::ranges::find_if(capture.draws, [sequence](const auto& value) {
+            return value.timeline.sequence == sequence;
+        });
+        if (draw == capture.draws.end() || ordinal >= draw->timeline.draw_info.vertex_count) {
+            SendError(packet,
+                      draw == capture.draws.end() ? Error::NotFound : Error::InvalidArgument);
+            return;
+        }
+        const auto shader = std::ranges::find_if(
+            capture.shaders, [id = draw->shader_id](const auto& value) { return value.id == id; });
+        if (shader == capture.shaders.end()) {
+            SendError(packet, Error::NotFound);
+            return;
+        }
+        Pica::RegsInternal regs{};
+        std::ranges::copy(draw->registers, regs.reg_array.begin());
+        const auto& pipeline = regs.pipeline;
+        const PAddr base = pipeline.vertex_attributes.GetPhysicalBaseAddress();
+        u32 resolved = ordinal + pipeline.vertex_offset;
+        if (draw->timeline.draw_info.mode == Debugger::DrawMode::Indexed) {
+            const auto reference = std::ranges::find_if(draw->resources, [](const auto& value) {
+                return value.role == Debugger::ResourceRole::IndexBuffer;
+            });
+            const auto resource =
+                reference == draw->resources.end()
+                    ? capture.resources.end()
+                    : std::ranges::find_if(capture.resources,
+                                           [id = reference->resource_id](const auto& value) {
+                                               return value.id == id;
+                                           });
+            const u32 width = pipeline.index_array.format != 0 ? sizeof(u16) : sizeof(u8);
+            if (resource == capture.resources.end() ||
+                static_cast<u64>(ordinal + 1) * width > resource->bytes.size()) {
+                SendError(packet, Error::NotFound);
+                return;
+            }
+            if (width == sizeof(u16)) {
+                u16 value{};
+                std::memcpy(&value, resource->bytes.data() + ordinal * width, sizeof(value));
+                resolved = value;
+            } else {
+                resolved = resource->bytes[ordinal];
+            }
+        }
+        const auto read_captured = [&capture](PAddr address, std::size_t size) -> const u8* {
+            for (const auto& resource : capture.resources) {
+                if (resource.role != Debugger::ResourceRole::VertexBuffer ||
+                    address < resource.address) {
+                    continue;
+                }
+                const u64 offset = static_cast<u64>(address) - resource.address;
+                if (offset <= resource.bytes.size() &&
+                    size <= resource.bytes.size() - static_cast<std::size_t>(offset)) {
+                    return resource.bytes.data() + offset;
+                }
+            }
+            return nullptr;
+        };
+        Pica::AttributeBuffer defaults{};
+        Pica::AttributeBuffer input{};
+        using FloatUniforms = std::array<std::array<float, 4>, 96>;
+        using IntegerUniforms = std::array<std::array<u8, 4>, 4>;
+        using BoolUniforms = std::array<bool, 16>;
+        using FixedAttributes = std::array<std::array<float, 4>, 16>;
+        using FixedWritten = std::array<bool, 16>;
+        using InputMap = std::array<u8, 16>;
+        constexpr std::size_t ExpectedStateSize = sizeof(FloatUniforms) + sizeof(IntegerUniforms) +
+                                                  sizeof(BoolUniforms) + sizeof(FixedAttributes) +
+                                                  sizeof(FixedWritten) + sizeof(InputMap) +
+                                                  sizeof(std::array<std::array<u8, 4>, 7>);
+        if (shader->state.size() != ExpectedStateSize ||
+            shader->code.size() > Pica::MAX_PROGRAM_CODE_LENGTH ||
+            shader->metadata.size() > Pica::MAX_SWIZZLE_DATA_LENGTH) {
+            SendError(packet, Error::InvalidArgument);
+            return;
+        }
+        std::size_t state_offset{};
+        const auto take_state = [&](auto& value) {
+            std::memcpy(&value, shader->state.data() + state_offset, sizeof(value));
+            state_offset += sizeof(value);
+        };
+        FloatUniforms float_uniforms{};
+        IntegerUniforms integer_uniforms{};
+        BoolUniforms bool_uniforms{};
+        FixedAttributes fixed_attributes{};
+        FixedWritten fixed_written{};
+        InputMap input_map{};
+        std::array<std::array<u8, 4>, 7> output_map{};
+        take_state(float_uniforms);
+        take_state(integer_uniforms);
+        take_state(bool_uniforms);
+        take_state(fixed_attributes);
+        take_state(fixed_written);
+        take_state(input_map);
+        take_state(output_map);
+        for (std::size_t attribute = 0; attribute < fixed_attributes.size(); ++attribute) {
+            for (std::size_t component = 0; component < 4; ++component) {
+                defaults[attribute][component] =
+                    Pica::f24::FromFloat32(fixed_attributes[attribute][component]);
+            }
+        }
+        const Pica::VertexLoader loader{read_captured, pipeline};
+        if (!loader.LoadVertex(base, ordinal, resolved, input, defaults)) {
+            SendError(packet, Error::NotFound);
+            return;
+        }
+
+        Pica::ShaderSetup setup;
+        for (std::size_t reg = 0; reg < float_uniforms.size(); ++reg) {
+            for (std::size_t component = 0; component < 4; ++component) {
+                setup.uniforms.f[reg][component] =
+                    Pica::f24::FromFloat32(float_uniforms[reg][component]);
+            }
+        }
+        setup.uniforms.b = bool_uniforms;
+        for (std::size_t reg = 0; reg < integer_uniforms.size(); ++reg) {
+            for (std::size_t component = 0; component < 4; ++component) {
+                setup.uniforms.i[reg][component] = integer_uniforms[reg][component];
+            }
+        }
+        for (std::size_t index = 0; index < shader->code.size(); ++index) {
+            setup.UpdateProgramCode(index, shader->code[index]);
+        }
+        for (std::size_t index = 0; index < shader->metadata.size(); ++index) {
+            setup.UpdateSwizzleData(index, shader->metadata[index]);
+        }
+        Pica::Shader::InterpreterEngine engine;
+        engine.SetupBatch(setup, shader->entry_point);
+        Pica::ShaderUnit unit;
+        Pica::AttributeBuffer output{};
+        unit.LoadInput(regs.vs, input);
+        engine.Run(setup, unit);
+        unit.WriteOutput(regs.vs, output);
+        regs.rasterizer.ValidateSemantics();
+        const Pica::OutputVertex semantic{regs.rasterizer, output};
+
+        RenderVertexReply reply{};
+        reply.ordinal = ordinal;
+        reply.resolved_index = resolved;
+        reply.shader_entry = shader->entry_point;
+        reply.shader_id = Common::HashCombine(
+            Common::ComputeHash64(shader->code.data(), shader->code.size() * sizeof(u32)),
+            Common::ComputeHash64(shader->metadata.data(), shader->metadata.size() * sizeof(u32)),
+            Common::ComputeHash64(shader->state.data(), shader->state.size()));
+        reply.input_map = input_map;
+        for (std::size_t attribute = 0; attribute < 16; ++attribute) {
+            const bool fixed = pipeline.vertex_attributes.IsDefaultAttribute(attribute);
+            reply.fixed_mask |= static_cast<u32>(fixed) << attribute;
+            reply.loaded_mask |=
+                static_cast<u32>(!fixed &&
+                                 pipeline.vertex_attributes.GetNumElements(attribute) != 0)
+                << attribute;
+            for (std::size_t component = 0; component < 4; ++component) {
+                reply.input[attribute * 4 + component] = input[attribute][component].ToFloat32();
+                reply.output[attribute * 4 + component] = output[attribute][component].ToFloat32();
+            }
+        }
+        std::size_t semantic_index{};
+        const auto append_semantic = [&](const auto& value) {
+            for (std::size_t component = 0; component < sizeof(value) / sizeof(*value.AsArray());
+                 ++component) {
+                reply.semantic[semantic_index++] = value.AsArray()[component].ToFloat32();
+            }
+        };
+        append_semantic(semantic.pos);
+        append_semantic(semantic.quat);
+        append_semantic(semantic.color);
+        append_semantic(semantic.tc0);
+        append_semantic(semantic.tc1);
+        reply.semantic[semantic_index++] = semantic.tc0_w.ToFloat32();
+        append_semantic(semantic.view);
+        append_semantic(semantic.tc2);
+        std::memcpy(packet.GetPacketData().data(), &reply, sizeof(reply));
+        packet.SetPacketDataSize(sizeof(reply));
+        packet.SendReply();
+        return;
+    }
+
+    if (operation == RenderDebugOperation::Timeline) {
+        u64 epoch{};
+        u32 start{}, count{}, frame{};
+        if (!read_u64(3 * sizeof(u32), epoch) || !read_u32(5 * sizeof(u32), start) ||
+            !read_u32(6 * sizeof(u32), count) || !read_u32(7 * sizeof(u32), frame)) {
+            SendError(packet, Error::InvalidArgument);
+            return;
+        }
+        const u32 maximum =
+            (MAX_PACKET_DATA_SIZE - sizeof(RenderTimelinePageReply)) / sizeof(PicaTimelineEntry);
+        const auto page = session->QueryPage(
+            epoch, {.start = start, .count = std::min(count, maximum), .frame = frame});
+        const RenderTimelinePageReply header{
+            page.epoch, page.next_sequence, static_cast<u32>(page.entries.size()),
+            static_cast<u32>(page.has_more) | static_cast<u32>(page.stale) << 1};
+        std::memcpy(packet.GetPacketData().data(), &header, sizeof(header));
+        for (std::size_t index = 0; index < page.entries.size(); ++index) {
+            const auto& source = page.entries[index];
+            const PicaTimelineEntry target{
+                source.sequence,
+                static_cast<u32>(source.kind),
+                source.frame,
+                source.draw,
+                source.frame_draw,
+                source.changed_mask,
+                {source.target.color_address, source.target.depth_address, source.target.width,
+                 source.target.height, source.target.color_format, source.target.depth_format},
+                static_cast<u32>(source.draw_info.mode),
+                source.draw_info.vertex_count,
+                source.draw_info.topology,
+                source.draw_info.vertex_offset,
+                source.draw_info.vertex_shader_entry};
+            std::memcpy(packet.GetPacketData().data() + sizeof(header) + index * sizeof(target),
+                        &target, sizeof(target));
+        }
+        packet.SetPacketDataSize(sizeof(header) + page.entries.size() * sizeof(PicaTimelineEntry));
+        packet.SendReply();
+        return;
+    }
+
+    u32 sequence{}, start{}, count{};
+    if (!read_u32(3 * sizeof(u32), sequence) || !read_u32(4 * sizeof(u32), start) ||
+        !read_u32(5 * sizeof(u32), count)) {
+        SendError(packet, Error::InvalidArgument);
+        return;
+    }
+    if (operation == RenderDebugOperation::State) {
+        const auto state = session->GetDrawState(sequence);
+        if (!state || start > state->size()) {
+            SendError(packet, state ? Error::InvalidArgument : Error::NotFound);
+            return;
+        }
+        const u32 returned =
+            std::min<u32>({count, static_cast<u32>(state->size() - start),
+                           (MAX_PACKET_DATA_SIZE - sizeof(RenderStatePageReply)) / sizeof(u32)});
+        const RenderStatePageReply reply{static_cast<u32>(state->size()), start, returned};
+        std::memcpy(packet.GetPacketData().data(), &reply, sizeof(reply));
+        std::memcpy(packet.GetPacketData().data() + sizeof(reply), state->data() + start,
+                    returned * sizeof(u32));
+        packet.SetPacketDataSize(sizeof(reply) + returned * sizeof(u32));
+        packet.SendReply();
+        return;
+    }
+    if (operation == RenderDebugOperation::Validate) {
+        const auto issues = session->Validate(sequence != 0);
+        const u32 maximum =
+            (MAX_PACKET_DATA_SIZE - sizeof(u32)) / sizeof(RenderValidationIssueReply);
+        const u32 returned =
+            start >= issues.size()
+                ? 0
+                : std::min({count, maximum, static_cast<u32>(issues.size() - start)});
+        std::memcpy(packet.GetPacketData().data(), &returned, sizeof(returned));
+        for (u32 index = 0; index < returned; ++index) {
+            const auto& issue = issues[start + index];
+            RenderValidationIssueReply reply{static_cast<u32>(issue.kind), issue.frame, issue.draw,
+                                             static_cast<u32>(issue.role), issue.slot};
+            std::memcpy(reply.message.data(), issue.message.data(),
+                        std::min(reply.message.size(), issue.message.size()));
+            std::memcpy(packet.GetPacketData().data() + sizeof(returned) + index * sizeof(reply),
+                        &reply, sizeof(reply));
+        }
+        packet.SetPacketDataSize(sizeof(returned) + returned * sizeof(RenderValidationIssueReply));
+        packet.SendReply();
+        return;
+    }
+    if (operation == RenderDebugOperation::OutputStatus ||
+        operation == RenderDebugOperation::OutputRead) {
+        const auto phase = static_cast<Debugger::CapturePhase>(start);
+        if (phase > Debugger::CapturePhase::PostDraw) {
+            SendError(packet, Error::InvalidArgument);
+            return;
+        }
+        const auto output = session->GetDrawOutput(
+            sequence, phase, operation == RenderDebugOperation::OutputRead ? count : 0,
+            operation == RenderDebugOperation::OutputRead ? MAX_PACKET_DATA_SIZE
+                                                          : std::numeric_limits<u64>::max());
+        if (!output) {
+            SendError(packet, Error::NotFound);
+            return;
+        }
+        if (operation == RenderDebugOperation::OutputRead) {
+            std::memcpy(packet.GetPacketData().data(), output->bytes.data(), output->bytes.size());
+            packet.SetPacketDataSize(static_cast<u32>(output->bytes.size()));
+        } else {
+            const RenderOutputInfoReply reply{session_id,
+                                              sequence,
+                                              static_cast<u32>(phase),
+                                              output->address,
+                                              output->format,
+                                              output->width,
+                                              output->height,
+                                              output->stride,
+                                              static_cast<u32>(output->tiling),
+                                              static_cast<u32>(output->origin),
+                                              static_cast<u32>(output->bytes.size()),
+                                              0};
+            std::memcpy(packet.GetPacketData().data(), &reply, sizeof(reply));
+            packet.SetPacketDataSize(sizeof(reply));
+        }
+        packet.SendReply();
+        return;
+    }
+    SendError(packet, Error::Unsupported);
 }
 
 bool RPCServer::IsEmulationControlEnabled(EmulationControl operation) const {
@@ -537,6 +1163,7 @@ void RPCServer::HandlePicaTimeline(Packet& packet, PicaTimelineOperation operati
                 static_cast<u32>(source.kind),
                 source.frame,
                 source.draw,
+                source.frame_draw,
                 source.changed_mask,
                 {source.target.color_address, source.target.depth_address, source.target.width,
                  source.target.height, source.target.color_format, source.target.depth_format},
@@ -579,13 +1206,13 @@ void RPCServer::HandlePicaTrace(Packet& packet, PicaTraceOperation operation, u3
                                 u32 start, u32 count, u32 register_id) {
     if (operation == PicaTraceOperation::Start) {
         if (!pica_trace_owned) {
-            pica_trace_owned = Pica::DebugUtils::StartPicaTracing(
-                Pica::DebugUtils::PicaTraceOwner::RPC);
+            pica_trace_owned =
+                Pica::DebugUtils::StartPicaTracing(Pica::DebugUtils::PicaTraceOwner::RPC);
         }
     } else if (operation == PicaTraceOperation::Stop) {
         if (pica_trace_owned) {
-            if (auto trace = Pica::DebugUtils::FinishPicaTracing(
-                    Pica::DebugUtils::PicaTraceOwner::RPC)) {
+            if (auto trace =
+                    Pica::DebugUtils::FinishPicaTracing(Pica::DebugUtils::PicaTraceOwner::RPC)) {
                 pica_trace_truncated = trace->truncated;
                 pica_trace_data.resize(trace->writes.size() *
                                        sizeof(Pica::DebugUtils::PicaTrace::Write));
@@ -976,8 +1603,7 @@ void RPCServer::HandleEmulationControl(Packet& packet, EmulationControl operatio
 }
 
 bool RPCServer::ValidatePacket(const PacketHeader& header) const {
-    if (header.version == 0 || header.version > CURRENT_VERSION ||
-        header.packet_size > MAX_PACKET_DATA_SIZE) {
+    if (header.magic != PROTOCOL_MAGIC || header.packet_size > MAX_PACKET_DATA_SIZE) {
         return false;
     }
     switch (header.packet_type) {
@@ -1010,8 +1636,9 @@ bool RPCServer::ValidatePacket(const PacketHeader& header) const {
     case PacketType::RenderSession:
         return header.packet_size >= 5 * sizeof(u32) && header.packet_size <= MAX_PACKET_DATA_SIZE;
     case PacketType::RenderOutput:
-        return header.packet_size >= 4 * sizeof(u32) &&
-               header.packet_size <= 6 * sizeof(u32);
+        return header.packet_size >= 4 * sizeof(u32) && header.packet_size <= 6 * sizeof(u32);
+    case PacketType::RenderDebug:
+        return header.packet_size >= sizeof(u32) && header.packet_size <= MAX_PACKET_DATA_SIZE;
     default:
         return false;
     }
@@ -1183,16 +1810,23 @@ void RPCServer::HandleSingleRequest(std::unique_ptr<Packet> request_packet) {
         }
         case PacketType::RenderOutput: {
             const auto operation = static_cast<RenderOutputOperation>(arg1);
-            const bool valid_size =
-                (operation == RenderOutputOperation::Status &&
-                 request_packet->GetPacketDataSize() == 4 * sizeof(u32)) ||
-                (operation == RenderOutputOperation::Read &&
-                 request_packet->GetPacketDataSize() == 6 * sizeof(u32));
+            const bool valid_size = (operation == RenderOutputOperation::Status &&
+                                     request_packet->GetPacketDataSize() == 4 * sizeof(u32)) ||
+                                    (operation == RenderOutputOperation::Read &&
+                                     request_packet->GetPacketDataSize() == 6 * sizeof(u32));
             if (valid_size) {
-                HandleRenderOutput(
-                    *request_packet, operation,
-                    static_cast<u64>(arg2) | static_cast<u64>(read_arg(2)) << 32,
-                    read_arg(3), read_arg(4), read_arg(5));
+                HandleRenderOutput(*request_packet, operation,
+                                   static_cast<u64>(arg2) | static_cast<u64>(read_arg(2)) << 32,
+                                   read_arg(3), read_arg(4), read_arg(5));
+                success = true;
+            }
+            break;
+        }
+        case PacketType::RenderDebug: {
+            const auto operation = static_cast<RenderDebugOperation>(arg1);
+            if (arg1 <= static_cast<u32>(RenderDebugOperation::DrawBreak)) {
+                HandleRenderDebug(*request_packet, operation,
+                                  packet_data.first(request_packet->GetPacketDataSize()));
                 success = true;
             }
             break;

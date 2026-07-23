@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <deque>
 #include <limits>
@@ -25,6 +26,8 @@ enum CaptureCapability : u64 {
     RegisterWrites = 1ULL << 1,
     Resources = 1ULL << 2,
     Shaders = 1ULL << 3,
+    RegisterState = 1ULL << 4,
+    Outputs = 1ULL << 5,
 };
 
 struct RenderTarget {
@@ -51,7 +54,10 @@ struct TimelineEntry {
     u32 sequence{};
     TimelineKind kind{};
     u32 frame{};
+    /// Global draw number, retained for correlating entries across frames.
     u32 draw{};
+    /// Zero-based draw number within `frame`.
+    u32 frame_draw{};
     u32 changed_mask{};
     RenderTarget target{};
     DrawInfo draw_info{};
@@ -66,6 +72,10 @@ enum class ResourceRole : u32 {
     Other,
 };
 
+enum class ResourceTiling : u32 { Linear, PicaTiled };
+enum class ResourceOrigin : u32 { TopLeft, BottomLeft };
+enum class CapturePhase : u32 { DrawInput, PreDraw, PostDraw };
+
 struct ResourceView {
     ResourceRole role{ResourceRole::Other};
     u32 slot{};
@@ -74,6 +84,8 @@ struct ResourceView {
     u32 width{};
     u32 height{};
     u32 stride{};
+    ResourceTiling tiling{ResourceTiling::Linear};
+    ResourceOrigin origin{ResourceOrigin::TopLeft};
     std::span<const u8> bytes;
 };
 
@@ -85,6 +97,8 @@ struct Resource {
     u32 width{};
     u32 height{};
     u32 stride{};
+    ResourceTiling tiling{ResourceTiling::Linear};
+    ResourceOrigin origin{ResourceOrigin::TopLeft};
     std::vector<u8> bytes;
 };
 
@@ -92,6 +106,7 @@ struct ResourceReference {
     ResourceRole role{ResourceRole::Other};
     u32 slot{};
     u64 resource_id{};
+    CapturePhase phase{CapturePhase::DrawInput};
 };
 
 struct RegisterWrite {
@@ -115,6 +130,7 @@ struct DrawCapture {
     u32 write_begin{};
     u32 write_count{};
     u64 shader_id{};
+    std::array<u32, 0x300> registers{};
     std::vector<ResourceReference> resources;
 };
 
@@ -130,9 +146,37 @@ struct CaptureStatus {
     bool truncated{};
 };
 
+enum class CaptureIssueKind : u32 {
+    Truncated,
+    MissingShader,
+    MissingResource,
+    EmptyResource,
+    MissingOutput,
+    InvalidReference,
+    Gap,
+};
+
+struct CaptureIssue {
+    CaptureIssueKind kind{};
+    u32 frame{};
+    u32 draw{};
+    ResourceRole role{ResourceRole::Other};
+    u32 slot{};
+    std::string message;
+};
+
+struct CaptureGap {
+    u32 frame{};
+    u32 draw{};
+    ResourceRole role{ResourceRole::Other};
+    u32 slot{};
+    std::string reason;
+};
+
 struct TimelinePosition {
     u32 frame{};
     u32 draw{};
+    u32 frame_draw{};
 };
 
 struct TimelineStatus {
@@ -153,19 +197,27 @@ struct TimelineQuery {
     u32 frame{std::numeric_limits<u32>::max()};
 };
 
+struct TimelinePage {
+    u64 epoch{};
+    u32 next_sequence{};
+    bool has_more{};
+    bool stale{};
+    std::vector<TimelineEntry> entries;
+};
+
 struct Capture {
     std::string producer;
     std::string backend;
     u64 capabilities{CaptureCapability::Timeline};
     bool complete{true};
     bool truncated{};
-    std::string gap_reason;
     u64 owned_bytes{};
     std::vector<TimelineEntry> timeline;
     std::vector<RegisterWrite> writes;
     std::vector<DrawCapture> draws;
     std::vector<Shader> shaders;
     std::vector<Resource> resources;
+    std::vector<CaptureGap> gaps;
 };
 
 struct CaptureLimits {
@@ -188,8 +240,9 @@ public:
     RenderTarget GetRenderTarget() const;
     void RecordDraw(const DrawInfo& info);
     void RecordDraw(const DrawInfo& info, const Shader& shader,
-                    std::span<const ResourceView> resources);
-    void RecordOutput(const ResourceView& output);
+                    std::span<const ResourceView> resources, std::span<const u32, 0x300> registers);
+    void RecordOutput(const ResourceView& output, CapturePhase phase = CapturePhase::PostDraw);
+    void RecordGap(ResourceRole role, u32 slot, std::string reason);
     void RecordRegisterWrite(RegisterWrite write);
     void RecordFrame();
     std::vector<TimelineEntry> Query(const TimelineQuery& query) const;
@@ -200,16 +253,20 @@ public:
     void SetCaptureLimits(CaptureLimits limits);
     void SetCaptureEnabled(bool enabled);
     bool IsCaptureEnabled() const;
-    void SetOutputCaptureEnabled(bool enabled);
+    enum class CaptureOwner : u32 { UserInterface = 1U << 0, RPC = 1U << 1 };
+    void SetOutputCaptureEnabled(CaptureOwner owner, bool enabled);
     bool IsOutputCaptureEnabled() const;
     bool Replace(std::vector<TimelineEntry> entries, bool was_truncated);
     bool Replace(Capture capture);
     void Snapshot(Capture& capture) const;
     CaptureStatus GetCaptureStatus() const;
     std::optional<DrawDetails> GetDrawDetails(u32 sequence) const;
-    std::optional<Resource> GetDrawOutput(
-        u32 sequence, u64 offset = 0,
-        u64 count = std::numeric_limits<u64>::max()) const;
+    std::optional<std::array<u32, 0x300>> GetDrawState(u32 sequence) const;
+    std::optional<Resource> GetDrawOutput(u32 sequence, CapturePhase phase = CapturePhase::PostDraw,
+                                          u64 offset = 0,
+                                          u64 count = std::numeric_limits<u64>::max()) const;
+    TimelinePage QueryPage(u64 epoch, const TimelineQuery& query) const;
+    std::vector<CaptureIssue> Validate(bool require_outputs = false) const;
 
 private:
     TimelineEntry Record(TimelineKind kind, const DrawInfo& info);
@@ -225,14 +282,17 @@ private:
     u32 sequence{};
     u32 frame_index{};
     u32 draw_index{};
+    u32 frame_draw_index{};
+    u64 epoch{1};
     u32 frame_limit{8};
     bool truncated{};
     CaptureLimits capture_limits;
     u32 draw_write_begin{};
     bool rich_truncated{};
     bool capture_enabled{true};
-    bool output_capture_enabled{};
+    u32 output_capture_owners{};
     std::string rich_gap_reason;
+    std::vector<CaptureGap> gaps;
     u64 capture_capabilities{CaptureCapability::Timeline};
     u64 owned_bytes{};
     std::vector<RegisterWrite> writes;

@@ -76,9 +76,10 @@ void DebugContext::OnDraw(const Debugger::DrawInfo& info) {
 }
 
 void DebugContext::OnDraw(const Debugger::DrawInfo& info, const Debugger::Shader& shader,
-                          std::span<const Debugger::ResourceView> resources) {
+                          std::span<const Debugger::ResourceView> resources,
+                          std::span<const u32, 0x300> registers) {
     if (auto session = GetRenderSession(); session->IsCaptureEnabled()) {
-        session->RecordDraw(info, shader, resources);
+        session->RecordDraw(info, shader, resources, registers);
     }
     OnEvent(Event::IncomingPrimitiveBatch, &info);
 }
@@ -87,6 +88,47 @@ void DebugContext::OnRegisterWrite(Debugger::RegisterWrite write) {
     if (auto session = GetRenderSession(); session->IsCaptureEnabled()) {
         session->RecordRegisterWrite(write);
     }
+}
+
+void DebugContext::ArmDrawBreak(u32 frame_draw, std::optional<u32> color_address) {
+    draw_break_frame_draw = frame_draw;
+    draw_break_color = color_address.value_or(0);
+    draw_break_filter_color = color_address.has_value();
+    draw_break_phase = 1;
+    GetRenderSession()->SetOutputCaptureEnabled(Debugger::RenderSession::CaptureOwner::RPC, true);
+}
+
+void DebugContext::CancelDrawBreak() {
+    draw_break_phase = 0;
+    GetRenderSession()->SetOutputCaptureEnabled(Debugger::RenderSession::CaptureOwner::RPC, false);
+}
+
+DebugContext::DrawBreakState DebugContext::GetDrawBreakState() const {
+    return {draw_break_phase, draw_break_frame_draw, draw_break_color, draw_break_filter_color};
+}
+
+bool DebugContext::HandleDrawBreak(Event event) {
+    const u32 phase = draw_break_phase;
+    if (phase == 1 && event == Event::IncomingPrimitiveBatch) {
+        const auto session = GetRenderSession();
+        const auto position = session->GetPosition();
+        const auto target = session->GetRenderTarget();
+        if (position.frame_draw != draw_break_frame_draw + 1 ||
+            (draw_break_filter_color && target.color_address != draw_break_color)) {
+            return false;
+        }
+        draw_break_phase = 2;
+        DoOnEvent(event, nullptr);
+        return true;
+    }
+    if (phase == 2 && event == Event::FinishedPrimitiveBatch) {
+        draw_break_phase = 3;
+        DoOnEvent(event, nullptr);
+        GetRenderSession()->SetOutputCaptureEnabled(Debugger::RenderSession::CaptureOwner::RPC,
+                                                    false);
+        return true;
+    }
+    return false;
 }
 
 void DebugContext::Resume() {

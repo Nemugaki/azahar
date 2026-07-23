@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <limits>
 #include <unordered_set>
@@ -17,24 +18,22 @@ namespace Debugger {
 namespace {
 
 constexpr std::array<u8, 8> Magic{'R', 'D', 'B', 'G', '\r', '\n', 0x1A, '\n'};
-constexpr u16 MajorVersion = 1;
-constexpr u16 MinorVersion = 0;
 constexpr u32 Complete = 1U << 0;
 constexpr u32 Truncated = 1U << 1;
-constexpr u64 KnownCapabilities = Timeline | RegisterWrites | Resources | Shaders;
+constexpr u64 KnownCapabilities =
+    Timeline | RegisterWrites | Resources | Shaders | RegisterState | Outputs;
 constexpr std::size_t MaxIdentityLength = 1024;
 constexpr std::size_t MaxGapLength = 4096;
+constexpr std::size_t MaxGaps = 1U << 20;
 
 #pragma pack(push, 1)
 struct FileHeader {
     std::array<u8, 8> magic;
-    u16_le major;
-    u16_le minor;
     u32_le flags;
     u64_le capabilities;
     u32_le producer_size;
     u32_le backend_size;
-    u32_le gap_size;
+    u32_le gap_count;
     u32_le timeline_count;
     u32_le write_count;
     u32_le draw_count;
@@ -42,13 +41,14 @@ struct FileHeader {
     u32_le resource_count;
     u64_le owned_bytes;
 };
-static_assert(sizeof(FileHeader) == 64);
+static_assert(sizeof(FileHeader) == 60);
 
 struct TimelineDiskEntry {
     u32_le sequence;
     u32_le kind;
     u32_le frame;
     u32_le draw;
+    u32_le frame_draw;
     u32_le changed_mask;
     u32_le color_address;
     u32_le depth_address;
@@ -62,7 +62,16 @@ struct TimelineDiskEntry {
     u32_le vertex_offset;
     u32_le vertex_shader_entry;
 };
-static_assert(sizeof(TimelineDiskEntry) == 64);
+static_assert(sizeof(TimelineDiskEntry) == 68);
+
+struct GapDisk {
+    u32_le frame;
+    u32_le draw;
+    u32_le role;
+    u32_le slot;
+    u32_le reason_size;
+};
+static_assert(sizeof(GapDisk) == 20);
 
 struct RegisterWriteDisk {
     u32_le bank;
@@ -85,8 +94,9 @@ struct ResourceReferenceDisk {
     u32_le role;
     u32_le slot;
     u64_le resource_id;
+    u32_le phase;
 };
-static_assert(sizeof(ResourceReferenceDisk) == 16);
+static_assert(sizeof(ResourceReferenceDisk) == 20);
 
 struct ShaderDisk {
     u64_le id;
@@ -106,9 +116,11 @@ struct ResourceDisk {
     u32_le width;
     u32_le height;
     u32_le stride;
+    u32_le tiling;
+    u32_le origin;
     u32_le byte_size;
 };
-static_assert(sizeof(ResourceDisk) == 40);
+static_assert(sizeof(ResourceDisk) == 48);
 #pragma pack(pop)
 
 template <typename T>
@@ -134,11 +146,16 @@ bool ValidRole(ResourceRole role) {
     return role <= ResourceRole::Other;
 }
 
+bool ValidPhase(CapturePhase phase) {
+    return phase <= CapturePhase::PostDraw;
+}
+
 TimelineDiskEntry ToDisk(const TimelineEntry& entry) {
     return {entry.sequence,
             static_cast<u32>(entry.kind),
             entry.frame,
             entry.draw,
+            entry.frame_draw,
             entry.changed_mask,
             entry.target.color_address,
             entry.target.depth_address,
@@ -158,6 +175,7 @@ TimelineEntry FromDisk(const TimelineDiskEntry& entry) {
             static_cast<TimelineKind>(static_cast<u32>(entry.kind)),
             entry.frame,
             entry.draw,
+            entry.frame_draw,
             entry.changed_mask,
             {entry.color_address, entry.depth_address, entry.width, entry.height,
              entry.color_format, entry.depth_format},
@@ -199,7 +217,7 @@ bool ValidateCapture(const Capture& capture, std::string& error) {
     if ((capture.capabilities & Timeline) == 0 ||
         (capture.capabilities & ~KnownCapabilities) != 0 ||
         capture.producer.size() > MaxIdentityLength || capture.backend.size() > MaxIdentityLength ||
-        capture.gap_reason.size() > MaxGapLength ||
+        capture.gaps.size() > MaxGaps ||
         capture.timeline.size() > std::numeric_limits<u32>::max() ||
         capture.writes.size() > std::numeric_limits<u32>::max() ||
         capture.draws.size() > std::numeric_limits<u32>::max() ||
@@ -207,6 +225,12 @@ bool ValidateCapture(const Capture& capture, std::string& error) {
         capture.resources.size() > std::numeric_limits<u32>::max()) {
         error = "capture metadata is invalid";
         return false;
+    }
+    for (const auto& gap : capture.gaps) {
+        if (!ValidRole(gap.role) || gap.reason.empty() || gap.reason.size() > MaxGapLength) {
+            error = "capture gap is invalid";
+            return false;
+        }
     }
     if ((!capture.writes.empty() && !(capture.capabilities & RegisterWrites)) ||
         (!capture.shaders.empty() && !(capture.capabilities & Shaders)) ||
@@ -244,7 +268,10 @@ bool ValidateCapture(const Capture& capture, std::string& error) {
 
     std::unordered_set<u64> resource_ids;
     for (const auto& resource : capture.resources) {
-        if (!resource.id || !ValidRole(resource.role) || !resource_ids.insert(resource.id).second ||
+        if (!resource.id || !ValidRole(resource.role) ||
+            resource.tiling > ResourceTiling::PicaTiled ||
+            resource.origin > ResourceOrigin::BottomLeft ||
+            !resource_ids.insert(resource.id).second ||
             resource.bytes.size() > std::numeric_limits<u32>::max() ||
             resource.bytes.size() > std::numeric_limits<u64>::max() - calculated_owned) {
             error = "capture resource is invalid";
@@ -268,10 +295,15 @@ bool ValidateCapture(const Capture& capture, std::string& error) {
             return false;
         }
         for (const auto& reference : draw.resources) {
-            if (!ValidRole(reference.role) || !resource_ids.contains(reference.resource_id)) {
+            if (!ValidRole(reference.role) || !ValidPhase(reference.phase) ||
+                !resource_ids.contains(reference.resource_id)) {
                 error = "capture resource reference is invalid";
                 return false;
             }
+        }
+        if ((capture.capabilities & RegisterState) == 0) {
+            error = "capture draw has no immutable register state";
+            return false;
         }
     }
     return true;
@@ -293,23 +325,23 @@ bool SaveCapture(const std::string& path, const Capture& capture, std::string& e
         return false;
     }
 
-    const u32 flags = (capture.complete && capture.gap_reason.empty() ? Complete : 0) |
+    const u32 flags = (capture.complete && capture.gaps.empty() ? Complete : 0) |
                       (capture.truncated ? Truncated : 0);
     const FileHeader header{Magic,
-                            MajorVersion,
-                            MinorVersion,
                             flags,
                             capture.capabilities,
                             static_cast<u32>(capture.producer.size()),
                             static_cast<u32>(capture.backend.size()),
-                            static_cast<u32>(capture.gap_reason.size()),
+                            static_cast<u32>(capture.gaps.size()),
                             static_cast<u32>(capture.timeline.size()),
                             static_cast<u32>(capture.writes.size()),
                             static_cast<u32>(capture.draws.size()),
                             static_cast<u32>(capture.shaders.size()),
                             static_cast<u32>(capture.resources.size()),
                             capture.owned_bytes};
-    std::ofstream output(path, std::ios::binary | std::ios::trunc);
+    const std::filesystem::path destination{path};
+    const auto temporary = destination.string() + ".tmp";
+    std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
     if (!output) {
         error = "could not open capture for writing";
         return false;
@@ -317,7 +349,11 @@ bool SaveCapture(const std::string& path, const Capture& capture, std::string& e
     Write(output, header);
     output.write(capture.producer.data(), capture.producer.size());
     output.write(capture.backend.data(), capture.backend.size());
-    output.write(capture.gap_reason.data(), capture.gap_reason.size());
+    for (const auto& gap : capture.gaps) {
+        Write(output, GapDisk{gap.frame, gap.draw, static_cast<u32>(gap.role), gap.slot,
+                              static_cast<u32>(gap.reason.size())});
+        output.write(gap.reason.data(), gap.reason.size());
+    }
     for (const auto& entry : capture.timeline) {
         Write(output, ToDisk(entry));
     }
@@ -327,9 +363,11 @@ bool SaveCapture(const std::string& path, const Capture& capture, std::string& e
     for (const auto& draw : capture.draws) {
         Write(output, DrawDisk{draw.timeline.sequence, draw.write_begin, draw.write_count,
                                static_cast<u32>(draw.resources.size()), draw.shader_id});
+        WriteWords(output, draw.registers);
         for (const auto& reference : draw.resources) {
-            Write(output, ResourceReferenceDisk{static_cast<u32>(reference.role), reference.slot,
-                                                reference.resource_id});
+            Write(output,
+                  ResourceReferenceDisk{static_cast<u32>(reference.role), reference.slot,
+                                        reference.resource_id, static_cast<u32>(reference.phase)});
         }
     }
     for (const auto& shader : capture.shaders) {
@@ -342,13 +380,26 @@ bool SaveCapture(const std::string& path, const Capture& capture, std::string& e
         output.write(reinterpret_cast<const char*>(shader.state.data()), shader.state.size());
     }
     for (const auto& resource : capture.resources) {
-        Write(output, ResourceDisk{resource.id, static_cast<u32>(resource.role), resource.format,
-                                   resource.address, resource.width, resource.height,
-                                   resource.stride, static_cast<u32>(resource.bytes.size())});
+        Write(output,
+              ResourceDisk{resource.id, static_cast<u32>(resource.role), resource.format,
+                           resource.address, resource.width, resource.height, resource.stride,
+                           static_cast<u32>(resource.tiling), static_cast<u32>(resource.origin),
+                           static_cast<u32>(resource.bytes.size())});
         output.write(reinterpret_cast<const char*>(resource.bytes.data()), resource.bytes.size());
     }
     if (!output) {
         error = "failed while writing capture";
+        std::error_code ignored;
+        std::filesystem::remove(temporary, ignored);
+        return false;
+    }
+    output.close();
+    std::error_code rename_error;
+    std::filesystem::rename(temporary, destination, rename_error);
+    if (rename_error) {
+        error = "could not replace capture: " + rename_error.message();
+        std::error_code ignored;
+        std::filesystem::remove(temporary, ignored);
         return false;
     }
     return true;
@@ -372,8 +423,6 @@ bool LoadCapture(const std::string& path, Capture& capture, std::string& error,
 
     FileHeader header{};
     if (!Read(input, header) || header.magic != Magic ||
-        static_cast<u16>(header.major) != MajorVersion ||
-        static_cast<u16>(header.minor) != MinorVersion ||
         (static_cast<u32>(header.flags) & ~(Complete | Truncated)) != 0 ||
         (static_cast<u64>(header.capabilities) & Timeline) == 0 ||
         (static_cast<u64>(header.capabilities) & ~KnownCapabilities) != 0) {
@@ -383,27 +432,28 @@ bool LoadCapture(const std::string& path, Capture& capture, std::string& error,
 
     const u32 producer_size = header.producer_size;
     const u32 backend_size = header.backend_size;
-    const u32 gap_size = header.gap_size;
+    const u32 gap_count = header.gap_count;
     const u32 timeline_count = header.timeline_count;
     const u32 write_count = header.write_count;
     const u32 draw_count = header.draw_count;
     const u32 shader_count = header.shader_count;
     const u32 resource_count = header.resource_count;
     if (producer_size > MaxIdentityLength || backend_size > MaxIdentityLength ||
-        gap_size > MaxGapLength || timeline_count > limits.timeline_entries ||
+        gap_count > MaxGaps || timeline_count > limits.timeline_entries ||
         write_count > limits.register_writes || draw_count > limits.draws ||
         shader_count > limits.shaders || resource_count > limits.resources ||
         static_cast<u64>(header.owned_bytes) > limits.owned_bytes) {
         error = "capture exceeds configured limits";
         return false;
     }
-    const u64 minimum_size = sizeof(FileHeader) + static_cast<u64>(producer_size) + backend_size +
-                             gap_size +
-                             static_cast<u64>(timeline_count) * sizeof(TimelineDiskEntry) +
-                             static_cast<u64>(write_count) * sizeof(RegisterWriteDisk) +
-                             static_cast<u64>(draw_count) * sizeof(DrawDisk) +
-                             static_cast<u64>(shader_count) * sizeof(ShaderDisk) +
-                             static_cast<u64>(resource_count) * sizeof(ResourceDisk);
+    const u64 minimum_size =
+        sizeof(FileHeader) + static_cast<u64>(producer_size) + backend_size +
+        static_cast<u64>(gap_count) * sizeof(GapDisk) +
+        static_cast<u64>(timeline_count) * sizeof(TimelineDiskEntry) +
+        static_cast<u64>(write_count) * sizeof(RegisterWriteDisk) +
+        static_cast<u64>(draw_count) * (sizeof(DrawDisk) + 0x300 * sizeof(u32)) +
+        static_cast<u64>(shader_count) * sizeof(ShaderDisk) +
+        static_cast<u64>(resource_count) * sizeof(ResourceDisk);
     if (minimum_size > static_cast<u64>(end)) {
         error = "invalid capture size";
         return false;
@@ -411,14 +461,28 @@ bool LoadCapture(const std::string& path, Capture& capture, std::string& error,
 
     Capture loaded;
     loaded.capabilities = header.capabilities;
-    loaded.complete = (static_cast<u32>(header.flags) & Complete) != 0 && gap_size == 0;
+    loaded.complete = (static_cast<u32>(header.flags) & Complete) != 0 && gap_count == 0;
     loaded.truncated = (static_cast<u32>(header.flags) & Truncated) != 0;
     loaded.owned_bytes = header.owned_bytes;
     if (!ReadString(input, loaded.producer, producer_size) ||
-        !ReadString(input, loaded.backend, backend_size) ||
-        !ReadString(input, loaded.gap_reason, gap_size)) {
+        !ReadString(input, loaded.backend, backend_size)) {
         error = "truncated capture metadata";
         return false;
+    }
+    loaded.gaps.reserve(gap_count);
+    for (u32 index = 0; index < gap_count; ++index) {
+        GapDisk disk{};
+        CaptureGap gap;
+        if (!Read(input, disk) || static_cast<u32>(disk.reason_size) > MaxGapLength ||
+            !ReadString(input, gap.reason, disk.reason_size)) {
+            error = "truncated capture gaps";
+            return false;
+        }
+        gap.frame = disk.frame;
+        gap.draw = disk.draw;
+        gap.role = static_cast<ResourceRole>(static_cast<u32>(disk.role));
+        gap.slot = disk.slot;
+        loaded.gaps.push_back(std::move(gap));
     }
 
     loaded.timeline.reserve(timeline_count);
@@ -451,7 +515,13 @@ bool LoadCapture(const std::string& path, Capture& capture, std::string& error,
             error = "capture draw has no timeline entry";
             return false;
         }
-        DrawCapture draw{*timeline, disk.write_begin, disk.write_count, disk.shader_id, {}};
+        DrawCapture draw{*timeline, disk.write_begin, disk.write_count, disk.shader_id, {}, {}};
+        std::vector<u32> registers;
+        if (!ReadWords(input, registers, draw.registers.size())) {
+            error = "truncated capture draw registers";
+            return false;
+        }
+        std::ranges::copy(registers, draw.registers.begin());
         draw.resources.reserve(static_cast<u32>(disk.resource_count));
         for (u32 resource = 0; resource < static_cast<u32>(disk.resource_count); ++resource) {
             ResourceReferenceDisk reference{};
@@ -459,8 +529,10 @@ bool LoadCapture(const std::string& path, Capture& capture, std::string& error,
                 error = "truncated capture resource references";
                 return false;
             }
-            draw.resources.push_back({static_cast<ResourceRole>(static_cast<u32>(reference.role)),
-                                      reference.slot, reference.resource_id});
+            draw.resources.push_back(
+                {static_cast<ResourceRole>(static_cast<u32>(reference.role)), reference.slot,
+                 reference.resource_id,
+                 static_cast<CapturePhase>(static_cast<u32>(reference.phase))});
         }
         loaded.draws.push_back(std::move(draw));
     }
@@ -500,10 +572,16 @@ bool LoadCapture(const std::string& path, Capture& capture, std::string& error,
             error = "invalid capture resource header";
             return false;
         }
-        Resource resource{disk.id,      static_cast<ResourceRole>(static_cast<u32>(disk.role)),
-                          disk.address, disk.format,
-                          disk.width,   disk.height,
-                          disk.stride,  {}};
+        Resource resource{disk.id,
+                          static_cast<ResourceRole>(static_cast<u32>(disk.role)),
+                          disk.address,
+                          disk.format,
+                          disk.width,
+                          disk.height,
+                          disk.stride,
+                          static_cast<ResourceTiling>(static_cast<u32>(disk.tiling)),
+                          static_cast<ResourceOrigin>(static_cast<u32>(disk.origin)),
+                          {}};
         resource.bytes.resize(static_cast<u32>(disk.byte_size));
         if (!resource.bytes.empty() &&
             !input.read(reinterpret_cast<char*>(resource.bytes.data()), resource.bytes.size())) {
