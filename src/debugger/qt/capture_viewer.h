@@ -49,7 +49,6 @@ private:
     std::shared_ptr<RenderSessionManager> sessions;
     QComboBox* session_selector{};
     QCheckBox* follow_live{};
-    QCheckBox* freeze_timeline{};
     QLineEdit* filter{};
     QTreeWidget* timeline{};
     QSlider* event_slider{};

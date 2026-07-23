@@ -146,16 +146,14 @@ CaptureViewerWidget::CaptureViewerWidget(std::shared_ptr<RenderSessionManager> s
     filter->setPlaceholderText(tr("Filter draws, frames, targets, or topology"));
     filter->setClearButtonEnabled(true);
     follow_live = new QCheckBox{tr("Follow live")};
+    follow_live->setObjectName(QStringLiteral("followRenderLive"));
     follow_live->setChecked(true);
-    freeze_timeline = new QCheckBox{tr("Freeze selection")};
-    freeze_timeline->setObjectName(QStringLiteral("freezeRenderSelection"));
-    freeze_timeline->setToolTip(
-        tr("Keeps the selected event while the bounded live timeline continues to refresh."));
+    follow_live->setToolTip(
+        tr("Tracks the newest event. Disable it to keep the current selection."));
     auto* refresh = new QPushButton{tr("Refresh")};
     filter_row->addWidget(new QLabel{tr("Filter:")});
     filter_row->addWidget(filter, 1);
     filter_row->addWidget(follow_live);
-    filter_row->addWidget(freeze_timeline);
     filter_row->addWidget(refresh);
     layout->addLayout(filter_row);
     load_older = new QPushButton{tr("Load 128 older events")};
@@ -264,12 +262,7 @@ CaptureViewerWidget::CaptureViewerWidget(std::shared_ptr<RenderSessionManager> s
     auto* timer = new QTimer{this};
     timer->setInterval(500);
     connect(timer, &QTimer::timeout, this, [this] {
-        if (!active || !follow_live->isChecked()) {
-            return;
-        }
-        const auto status = sessions->GetActive()->GetStatus();
-        if (!freeze_timeline->isChecked() ||
-            status.oldest_sequence != displayed_status.oldest_sequence) {
+        if (active) {
             Refresh();
         }
     });
@@ -475,8 +468,7 @@ void CaptureViewerWidget::Refresh() {
     event_position->setText(draw_items.empty() ? tr("No events")
                                                : tr("%1 events").arg(draw_items.size()));
     FilterTimeline(filter->text());
-    if (follow_live->isChecked() && !freeze_timeline->isChecked() && was_at_bottom &&
-        !draw_items.empty()) {
+    if (follow_live->isChecked() && was_at_bottom && !draw_items.empty()) {
         timeline->setCurrentItem(draw_items.back());
         timeline->scrollToItem(draw_items.back());
     } else {
@@ -493,8 +485,8 @@ void CaptureViewerWidget::Refresh() {
             }
         }
         if (!restored && !draw_items.empty()) {
-            timeline->setCurrentItem(freeze_timeline->isChecked() ? draw_items.front()
-                                                                  : draw_items.back());
+            timeline->setCurrentItem(follow_live->isChecked() ? draw_items.back()
+                                                              : draw_items.front());
         }
         scroll_bar->setValue(old_scroll);
     }

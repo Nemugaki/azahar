@@ -42,7 +42,7 @@ int main(int argc, char** argv) {
     assert(details && details->text().contains(QStringLiteral("offset 8")));
     assert(details->text().contains(QStringLiteral("Immutable render state")));
 
-    viewer.findChild<QCheckBox*>(QStringLiteral("freezeRenderSelection"))->setChecked(true);
+    viewer.findChild<QCheckBox*>(QStringLiteral("followRenderLive"))->setChecked(false);
     live->SetFrameLimit(1);
     live->RecordFrame();
     live->SetRenderTarget({0x5000, 0x6000, 16, 16, 0, 1});
