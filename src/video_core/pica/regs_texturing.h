@@ -113,10 +113,12 @@ struct TexturingRegs {
             return 4;
         case TextureFormat::I4:
         case TextureFormat::A4:
+        case TextureFormat::ETC1:
             return 1;
         case TextureFormat::I8:
         case TextureFormat::A8:
         case TextureFormat::IA4:
+        case TextureFormat::ETC1A4:
             return 2;
         default: // placeholder for yet unknown formats
             UNIMPLEMENTED();
