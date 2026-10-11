@@ -53,7 +53,17 @@ the next draw. It therefore works with hardware shaders enabled and does not hal
 Save-state slots range from 0 through 10. Screenshot requests require a running game and an
 absolute output path that does not already exist. `screenshot_png` and `screenshot_raw` instead
 return the image over RPC (requires the screenshot grant), and `perf_stats` returns the same frame
-timing the status bar shows; both report `InvalidState` while no game is running.
+timing the status bar shows.
+
+Requests that cannot run are refused with an error rather than an empty reply: `InvalidState`
+when no game is running (or the CPU is not halted for register reads, or no PICA breakpoint is
+active for shader preparation), `InvalidArgument` for out-of-range arguments, `NotFound` for a
+missing process, session or draw, and also when reading a trace, shader dump or snapshot whose
+generation has been replaced. `citra.py` raises these as `RPCError`.
+
+The render debugger is reachable through the `render_*` methods (`capture_render_frame`,
+`render_timeline`, `render_state`, `render_validate`, `render_draw_output`, `render_diff`,
+`render_vertex`, `render_draw_break`). Session id 0 selects the active session.
 
 Every packet starts with a 16-byte little-endian header: magic `AHZR` (`0x525A4841`), request id,
 request type, and payload size (at most 32 KiB). Replies echo the header. A refused request is

@@ -82,12 +82,33 @@ class EmulationControl(enum.IntEnum):
     Screenshot = 10
     FrameAdvance = 11
 
+class RenderDebugOperation(enum.IntEnum):
+    Capabilities = 0
+    CaptureFrame = 1
+    Timeline = 2
+    State = 3
+    Validate = 4
+    OutputStatus = 5
+    OutputRead = 6
+    Diff = 7
+    Vertex = 8
+    DrawBreak = 9
+
 class EmulationState(enum.IntEnum):
     Stopped = 0
     Running = 1
     Paused = 2
 
 CITRA_PORT = 45987
+
+TIMELINE_ENTRY_SIZE = 0x44
+TIMELINE_ENTRY_FIELDS = ("sequence", "kind", "frame", "draw", "frame_draw", "changed_mask",
+                         "color_address", "depth_address", "width", "height", "color_format",
+                         "depth_format", "draw_mode", "vertex_count", "topology",
+                         "vertex_offset", "vertex_shader_entry")
+
+def _timeline_entry(data, offset):
+    return dict(zip(TIMELINE_ENTRY_FIELDS, struct.unpack_from("<17I", data, offset)))
 
 class Citra:
     def __init__(self, address="127.0.0.1", port=CITRA_PORT, timeout=2.0, retries=3):
@@ -252,9 +273,9 @@ class Citra:
         if reply is None or len(reply) < 4:
             return None
         returned = struct.unpack_from("I", reply)[0]
-        if len(reply) != 4 + returned * 0x40:
+        if len(reply) != 4 + returned * TIMELINE_ENTRY_SIZE:
             return None
-        return [struct.unpack_from("16I", reply, 4 + index * 0x40)
+        return [_timeline_entry(reply, 4 + index * TIMELINE_ENTRY_SIZE)
                 for index in range(returned)]
 
     def pica_timeline_status(self):
@@ -358,6 +379,129 @@ class Citra:
             result.extend(chunk)
         status["bytes"] = bytes(result)
         return status
+
+    # Render debugger (RequestType.RenderDebug). Session id 0 means the active session.
+
+    def _render_debug(self, operation, words=(), extra=b"", **kwargs):
+        request = struct.pack(f"<{1 + len(words)}I", operation, *words) + extra
+        return self._request(RequestType.RenderDebug, request, **kwargs)
+
+    @staticmethod
+    def _session_words(session_id):
+        return (session_id & 0xFFFFFFFF, session_id >> 32)
+
+    def render_debug_capabilities(self):
+        reply = self._render_debug(RenderDebugOperation.Capabilities)
+        capabilities, max_data_size, build_size = struct.unpack_from("<QII", reply)
+        return {
+            "capture_capabilities": capabilities,
+            "max_packet_data_size": max_data_size,
+            "build": reply[16:16 + build_size].decode("utf-8", errors="replace"),
+        }
+
+    def capture_render_frame(self, path, timeout_ms=10000):
+        """Captures one complete frame to `path` and imports it as a new session."""
+        # Long-running and not idempotent while in progress, so it is sent once.
+        reply = self._render_debug(RenderDebugOperation.CaptureFrame, (timeout_ms,),
+                                   str(path).encode("utf-8"),
+                                   timeout=timeout_ms / 1000 + 5, resend=False)
+        session_id, timeline_count, issue_count, complete, truncated = \
+            struct.unpack("<QIIII", reply)
+        return {"session_id": session_id, "timeline_count": timeline_count,
+                "issue_count": issue_count, "complete": bool(complete),
+                "truncated": bool(truncated)}
+
+    def render_timeline(self, session_id=0, epoch=0, start=0, count=64, frame=0xFFFFFFFF):
+        reply = self._render_debug(RenderDebugOperation.Timeline,
+                                   (*self._session_words(session_id), epoch & 0xFFFFFFFF,
+                                    epoch >> 32, start, count, frame))
+        epoch_low, epoch_high, next_sequence, returned, flags = struct.unpack_from("<5I", reply)
+        if len(reply) != 0x14 + returned * TIMELINE_ENTRY_SIZE:
+            return None
+        return {
+            "epoch": epoch_low | epoch_high << 32,
+            "next_sequence": next_sequence,
+            "has_more": bool(flags & 1),
+            "stale": bool(flags & 2),
+            "entries": [_timeline_entry(reply, 0x14 + index * TIMELINE_ENTRY_SIZE)
+                        for index in range(returned)],
+        }
+
+    def render_state(self, sequence, session_id=0, start=0, count=0xFFFFFFFF):
+        """Returns (total, start, register_words) for the draw's PICA register state."""
+        reply = self._render_debug(RenderDebugOperation.State,
+                                   (*self._session_words(session_id), sequence, start, count))
+        total, first, returned = struct.unpack_from("<3I", reply)
+        return total, first, struct.unpack_from(f"<{returned}I", reply, 12)
+
+    def render_validate(self, session_id=0, strict=True, start=0, count=64):
+        reply = self._render_debug(RenderDebugOperation.Validate,
+                                   (*self._session_words(session_id), int(strict), start, count))
+        returned = struct.unpack_from("<I", reply)[0]
+        issues = []
+        for index in range(returned):
+            kind, frame, draw, role, slot, message = struct.unpack_from(
+                "<5I76s", reply, 4 + index * 0x60)
+            issues.append({"kind": kind, "frame": frame, "draw": draw, "role": role,
+                           "slot": slot,
+                           "message": message.rstrip(b"\0").decode("utf-8", errors="replace")})
+        return issues
+
+    def render_draw_output_status(self, sequence, phase=2, session_id=0):
+        """phase: 0 = draw input, 1 = pre-draw, 2 = post-draw."""
+        reply = self._render_debug(RenderDebugOperation.OutputStatus,
+                                   (*self._session_words(session_id), sequence, phase, 0))
+        (result_session, result_sequence, result_phase, address, format_, width, height,
+         stride, tiling, origin, size, _) = struct.unpack("<QIIQ8I", reply)
+        return {"session_id": result_session, "sequence": result_sequence,
+                "phase": result_phase, "address": address, "format": format_,
+                "width": width, "height": height, "stride": stride, "tiling": tiling,
+                "origin": origin, "size": size}
+
+    def render_draw_output(self, sequence, phase=2, session_id=0):
+        status = self.render_draw_output_status(sequence, phase, session_id)
+        data = bytearray()
+        while len(data) < status["size"]:
+            chunk = self._render_debug(RenderDebugOperation.OutputRead,
+                                       (*self._session_words(status["session_id"]), sequence,
+                                        phase, len(data)))
+            if not chunk:
+                return None
+            data.extend(chunk)
+        status["bytes"] = bytes(data)
+        return status
+
+    def render_diff(self, left_sequence, right_sequence, session_id=0, other_session_id=0):
+        reply = self._render_debug(RenderDebugOperation.Diff,
+                                   (*self._session_words(session_id),
+                                    *self._session_words(other_session_id),
+                                    left_sequence, right_sequence))
+        fields = ("changed_mask", "changed_registers", "changed_resources", "changed_pixels",
+                  "min_x", "min_y", "max_x", "max_y")
+        return dict(zip(fields, struct.unpack("<8I", reply)))
+
+    def render_vertex(self, sequence, ordinal, session_id=0):
+        """Re-runs the vertex shader for one vertex of a captured draw."""
+        reply = self._render_debug(RenderDebugOperation.Vertex,
+                                   (*self._session_words(session_id), sequence, ordinal))
+        (ordinal_, resolved, loaded_mask, fixed_mask, shader_entry, _,
+         shader_id) = struct.unpack_from("<6IQ", reply)
+        input_map = list(reply[0x20:0x30])
+        floats = struct.unpack_from("<152f", reply, 0x30)
+        return {"ordinal": ordinal_, "resolved_index": resolved, "loaded_mask": loaded_mask,
+                "fixed_mask": fixed_mask, "shader_entry": shader_entry, "shader_id": shader_id,
+                "input_map": input_map,
+                "input": [floats[i:i + 4] for i in range(0, 64, 4)],
+                "output": [floats[64 + i:64 + i + 4] for i in range(0, 64, 4)],
+                "semantic": floats[128:152]}
+
+    def render_draw_break(self, command=1, frame_draw=0, color_address=None):
+        """command: 0 = arm at frame_draw (optionally only for color_address), 1 = status,
+        2 = cancel. Returns the break state."""
+        words = (command, frame_draw, color_address or 0, int(color_address is not None))
+        reply = self._render_debug(RenderDebugOperation.DrawBreak, words)
+        return dict(zip(("phase", "frame_draw", "color_address", "filter_color"),
+                        struct.unpack("<4I", reply)))
 
     def pica_snapshot_status(self):
         reply = self._request(RequestType.PicaSnapshot, struct.pack("I", 1))
