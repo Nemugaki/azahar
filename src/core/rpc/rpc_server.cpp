@@ -82,12 +82,14 @@ void RPCServer::Stop() {
 }
 
 void RPCServer::HandleReadMemory(Packet& packet, u32 address, u32 data_size) {
-    if (!system.IsPoweredOn() || data_size > MAX_READ_SIZE) {
-        packet.SetPacketDataSize(0);
-        packet.SendReply();
+    if (!system.IsPoweredOn()) {
+        SendError(packet, Error::InvalidState);
         return;
     }
-    u32 read_size = data_size;
+    if (data_size > MAX_READ_SIZE) {
+        SendError(packet, Error::InvalidArgument);
+        return;
+    }
 
     // Note: Memory read occurs asynchronously from the state of the emulator
     if (selected_pid == 0xFFFFFFFF) {
@@ -95,15 +97,15 @@ void RPCServer::HandleReadMemory(Packet& packet, u32 address, u32 data_size) {
         system.Memory().ReadBlock(address, packet.GetPacketData().data(), data_size);
     } else {
         auto process = system.Kernel().GetProcessById(selected_pid);
-        if (process) {
-            system.Memory().ReadBlock(*process, address, packet.GetPacketData().data(), data_size);
-        } else {
+        if (!process) {
             LOG_ERROR(RPC_Server, "Selected process does not exist.");
-            read_size = 0;
+            SendError(packet, Error::NotFound);
+            return;
         }
+        system.Memory().ReadBlock(*process, address, packet.GetPacketData().data(), data_size);
     }
 
-    packet.SetPacketDataSize(read_size);
+    packet.SetPacketDataSize(data_size);
     packet.SendReply();
 }
 
@@ -143,15 +145,14 @@ void RPCServer::HandleWriteMemory(Packet& packet, u32 address, std::span<const u
 
 void RPCServer::HandleProcessList(Packet& packet, u32 start_index, u32 max_amount) {
     if (!system.IsPoweredOn()) {
-        packet.SetPacketDataSize(0);
-        packet.SendReply();
+        SendError(packet, Error::InvalidState);
         return;
     }
 
     const auto process_list = system.Kernel().GetProcessList();
-    const u32 start = std::min(start_index, static_cast<u32>(process_list.size()));
-    const u32 end = std::min(start + max_amount, static_cast<u32>(process_list.size()));
-    const u32 count = std::min(end - start, MAX_PROCESSES_IN_LIST);
+    const u32 total = static_cast<u32>(process_list.size());
+    const u32 start = std::min(start_index, total);
+    const u32 count = std::min({max_amount, total - start, MAX_PROCESSES_IN_LIST});
 
     u8* out_data = packet.GetPacketData().data();
     u32 written_bytes = 0;
@@ -1106,8 +1107,16 @@ void RPCServer::HandlePicaBreakpoint(Packet& packet, PicaBreakpointOperation ope
                                      u32 argument, u32 value, u32 mask) {
     const auto context = Pica::g_debug_context;
     if (!context) {
-        packet.SetPacketDataSize(0);
-        packet.SendReply();
+        SendError(packet, Error::InvalidState);
+        return;
+    }
+    const bool takes_event = operation == PicaBreakpointOperation::Set ||
+                             operation == PicaBreakpointOperation::SetCondition ||
+                             operation == PicaBreakpointOperation::GetCondition ||
+                             operation == PicaBreakpointOperation::SetOptions ||
+                             operation == PicaBreakpointOperation::GetOptions;
+    if (takes_event && event >= static_cast<u32>(Pica::DebugContext::Event::NumEvents)) {
+        SendError(packet, Error::InvalidArgument);
         return;
     }
     if (operation == PicaBreakpointOperation::Set &&
@@ -1122,8 +1131,7 @@ void RPCServer::HandlePicaBreakpoint(Packet& packet, PicaBreakpointOperation ope
                event < static_cast<u32>(Pica::DebugContext::Event::NumEvents)) {
         if (operation == PicaBreakpointOperation::SetCondition) {
             if (argument > static_cast<u32>(Pica::DebugContext::ConditionField::FrameIndex)) {
-                packet.SetPacketDataSize(0);
-                packet.SendReply();
+                SendError(packet, Error::InvalidArgument);
                 return;
             }
             context->SetBreakpointCondition(
@@ -1167,8 +1175,7 @@ void RPCServer::HandlePicaTimeline(Packet& packet, PicaTimelineOperation operati
                                    u32 shader_entry, u32 frame) {
     const auto context = Pica::g_debug_context;
     if (!context) {
-        packet.SetPacketDataSize(0);
-        packet.SendReply();
+        SendError(packet, Error::InvalidState);
         return;
     }
     const auto& sessions = render_sessions;
@@ -1224,22 +1231,16 @@ void RPCServer::HandlePicaTimeline(Packet& packet, PicaTimelineOperation operati
 }
 
 void RPCServer::HandlePicaRenderTarget(Packet& packet) {
-    const auto context = Pica::g_debug_context;
-    if (!context) {
-        packet.SetPacketDataSize(0);
-    } else {
-        if (!render_sessions) {
-            packet.SetPacketDataSize(0);
-            packet.SendReply();
-            return;
-        }
-        const auto target = render_sessions->GetActive()->GetRenderTarget();
-        const PicaRenderTargetReply reply{target.color_address, target.depth_address,
-                                          target.width,         target.height,
-                                          target.color_format,  target.depth_format};
-        std::memcpy(packet.GetPacketData().data(), &reply, sizeof(reply));
-        packet.SetPacketDataSize(sizeof(reply));
+    if (!Pica::g_debug_context || !render_sessions) {
+        SendError(packet, Error::InvalidState);
+        return;
     }
+    const auto target = render_sessions->GetActive()->GetRenderTarget();
+    const PicaRenderTargetReply reply{target.color_address, target.depth_address,
+                                      target.width,         target.height,
+                                      target.color_format,  target.depth_format};
+    std::memcpy(packet.GetPacketData().data(), &reply, sizeof(reply));
+    packet.SetPacketDataSize(sizeof(reply));
     packet.SendReply();
 }
 
@@ -1266,14 +1267,18 @@ void RPCServer::HandlePicaTrace(Packet& packet, PicaTraceOperation operation, u3
             pica_trace_owned = false;
         }
     } else if (operation == PicaTraceOperation::Read) {
-        if (generation == pica_trace_generation && start <= pica_trace_data.size()) {
-            const auto available = static_cast<u32>(pica_trace_data.size() - start);
-            const auto read_size = std::min(count, available);
-            std::memcpy(packet.GetPacketData().data(), pica_trace_data.data() + start, read_size);
-            packet.SetPacketDataSize(read_size);
-        } else {
-            packet.SetPacketDataSize(0);
+        if (generation != pica_trace_generation) {
+            SendError(packet, Error::NotFound);
+            return;
         }
+        if (start > pica_trace_data.size()) {
+            SendError(packet, Error::InvalidArgument);
+            return;
+        }
+        const auto available = static_cast<u32>(pica_trace_data.size() - start);
+        const auto read_size = std::min(count, available);
+        std::memcpy(packet.GetPacketData().data(), pica_trace_data.data() + start, read_size);
+        packet.SetPacketDataSize(read_size);
         packet.SendReply();
         return;
     } else if (operation == PicaTraceOperation::ReadWrites) {
@@ -1314,14 +1319,12 @@ void RPCServer::HandlePicaTrace(Packet& packet, PicaTraceOperation operation, u3
 
 void RPCServer::HandleCPURegisters(Packet& packet, u32 core, u32 bank, u32 start, u32 count) {
     if (!system.IsPoweredOn() || !system.IsCPUHalted()) {
-        packet.SetPacketDataSize(0);
-        packet.SendReply();
+        SendError(packet, Error::InvalidState);
         return;
     }
 
     if (core >= system.GetNumCores()) {
-        packet.SetPacketDataSize(0);
-        packet.SendReply();
+        SendError(packet, Error::InvalidArgument);
         return;
     }
     const auto snapshot = system.GetCore(core).GetRegisterSnapshot();
@@ -1439,8 +1442,7 @@ void RPCServer::HandleDebugCapture(Packet& packet, DebugCaptureOperation operati
 void RPCServer::HandleGXCommandTrace(Packet& packet, GXCommandTraceOperation operation, u32 start,
                                      u32 count, u32 command_id) {
     if (!system.IsPoweredOn()) {
-        packet.SetPacketDataSize(0);
-        packet.SendReply();
+        SendError(packet, Error::InvalidState);
         return;
     }
     auto& debugger = system.GPU().Debugger();
@@ -1475,15 +1477,13 @@ void RPCServer::HandlePicaShader(Packet& packet, PicaShaderOperation operation, 
                                  u32 start, u32 count, u32 instruction_offset) {
     const auto context = Pica::g_debug_context;
     if (!system.IsPoweredOn() || !context) {
-        packet.SetPacketDataSize(0);
-        packet.SendReply();
+        SendError(packet, Error::InvalidState);
         return;
     }
 
     if (operation == PicaShaderOperation::Prepare) {
         if (!context->GetBreakpointState().at_breakpoint) {
-            packet.SetPacketDataSize(0);
-            packet.SendReply();
+            SendError(packet, Error::InvalidState);
             return;
         }
         auto& pica = system.GPU().PicaCore();
@@ -1550,16 +1550,20 @@ void RPCServer::HandlePicaShader(Packet& packet, PicaShaderOperation operation, 
         }
         ++pica_shader_generation;
     } else if (operation == PicaShaderOperation::ReadDump) {
-        if (generation == pica_shader_generation && start <= pica_shader_dump.size()) {
-            const u32 size = std::min(
-                {count, MAX_PACKET_DATA_SIZE, static_cast<u32>(pica_shader_dump.size() - start)});
-            if (size) {
-                std::memcpy(packet.GetPacketData().data(), pica_shader_dump.data() + start, size);
-            }
-            packet.SetPacketDataSize(size);
-        } else {
-            packet.SetPacketDataSize(0);
+        if (generation != pica_shader_generation) {
+            SendError(packet, Error::NotFound);
+            return;
         }
+        if (start > pica_shader_dump.size()) {
+            SendError(packet, Error::InvalidArgument);
+            return;
+        }
+        const u32 size = std::min(
+            {count, MAX_PACKET_DATA_SIZE, static_cast<u32>(pica_shader_dump.size() - start)});
+        if (size) {
+            std::memcpy(packet.GetPacketData().data(), pica_shader_dump.data() + start, size);
+        }
+        packet.SetPacketDataSize(size);
         packet.SendReply();
         return;
     } else if (operation == PicaShaderOperation::ReadCycles) {
@@ -1601,8 +1605,7 @@ void RPCServer::HandlePicaShader(Packet& packet, PicaShaderOperation operation, 
 void RPCServer::HandlePicaSnapshot(Packet& packet, PicaSnapshotOperation operation, u32 generation,
                                    u32 offset, u32 size) {
     if (!system.IsPoweredOn()) {
-        packet.SetPacketDataSize(0);
-        packet.SendReply();
+        SendError(packet, Error::InvalidState);
         return;
     }
 
@@ -1626,8 +1629,8 @@ void RPCServer::HandlePicaSnapshot(Packet& packet, PicaSnapshotOperation operati
         packet.SetPacketDataSize(0);
         break;
     default:
-        packet.SetPacketDataSize(0);
-        break;
+        SendError(packet, Error::InvalidArgument);
+        return;
     }
     packet.SendReply();
 }
