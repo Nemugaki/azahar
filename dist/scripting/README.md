@@ -30,7 +30,10 @@ print(c.cpu_registers(0, 0, 16))
 c.debug_resume()
 c.save_state(1)
 c.load_state(1)
-c.screenshot("/absolute/new/output.png")
+c.screenshot("/absolute/new/output.png")  # written by the frontend
+png = c.screenshot_png()                    # returned over RPC
+width, height, rgb = c.screenshot_raw(res_scale=1)
+print(c.perf_stats())
 snapshot = c.capture_pica_snapshot()
 c.set_pica_breakpoint(2)  # incoming primitive batch
 print(c.pica_breakpoints())
@@ -48,7 +51,15 @@ c.stop()
 Lifecycle calls return `(result, state)`. PICA capture arms a one-shot snapshot at the beginning of
 the next draw. It therefore works with hardware shaders enabled and does not halt emulation.
 Save-state slots range from 0 through 10. Screenshot requests require a running game and an
-absolute output path that does not already exist.
+absolute output path that does not already exist. `screenshot_png` and `screenshot_raw` instead
+return the image over RPC (requires the screenshot grant), and `perf_stats` returns the same frame
+timing the status bar shows; both report `InvalidState` while no game is running.
+
+Every packet starts with a 16-byte little-endian header: magic `AHZR` (`0x525A4841`), request id,
+request type, and payload size (at most 32 KiB). Replies echo the header. A refused request is
+answered with an 8-byte payload of magic `ECPR` (`0x52504345`) and an error code, which `citra.py`
+raises as `RPCError`. Resending a request with the same id returns the cached reply, so the client
+retries timed-out requests (except `TakeScreenshot`, whose reply arrives once a frame renders).
 
 ## PICA snapshot format
 

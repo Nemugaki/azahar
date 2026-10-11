@@ -1,6 +1,6 @@
 # Copyright Citra Emulator Project / Azahar Emulator Project
 # Licensed under GPLv2 or any later version
-# Refer to the license.txt file included.
+# Refer to the misc/licenses/gplv2.txt file included.
 
 import struct
 import random
@@ -8,9 +8,11 @@ import enum
 import socket
 import time
 
-CURRENT_REQUEST_VERSION = 1
-MAX_REQUEST_DATA_SIZE = 1024
-MAX_PACKET_SIZE = 1024 + 0x10
+PROTOCOL_MAGIC = 0x525A4841     # "AHZR"
+ERROR_REPLY_MAGIC = 0x52504345  # "ECPR"
+HEADER_SIZE = 0x10
+MAX_REQUEST_DATA_SIZE = 32 * 1024
+MAX_PACKET_SIZE = HEADER_SIZE + MAX_REQUEST_DATA_SIZE
 
 class RequestType(enum.IntEnum):
     ReadMemory = 1,
@@ -31,6 +33,40 @@ class RequestType(enum.IntEnum):
     DebugCapture = 16,
     RenderSession = 17,
     RenderOutput = 18,
+    RenderDebug = 19,
+    TakeScreenshot = 20,
+    ReadScreenshot = 21,
+    GetPerfStats = 22,
+
+class Error(enum.IntEnum):
+    InvalidPacket = 1
+    PermissionDenied = 2
+    InvalidState = 3
+    InvalidArgument = 4
+    Unsupported = 5
+    NotFound = 6
+    Busy = 7
+    Failed = 8
+
+class RPCError(Exception):
+    def __init__(self, error):
+        self.error = Error(error) if error in Error._value2member_map_ else error
+        super().__init__(f"RPC request failed: {self.error!r}")
+
+class ScreenshotResult(enum.IntEnum):
+    Success = 0
+    Unsupported = 1
+    Busy = 2
+    Timeout = 3
+    EncodeFailed = 4
+    InvalidArgument = 5
+
+SCREENSHOT_FLAG_SECONDARY_WINDOW = 1 << 0
+SCREENSHOT_FLAG_RAW_RGB = 1 << 1
+
+PERF_STATS_FIELDS = ("system_fps", "game_fps", "time_vblank_interval", "time_hle_svc",
+                     "time_hle_ipc", "time_gpu", "time_swap", "time_remaining",
+                     "emulation_speed", "artic_transmitted", "artic_events")
 
 class EmulationControl(enum.IntEnum):
     Status = 0
@@ -54,33 +90,56 @@ class EmulationState(enum.IntEnum):
 CITRA_PORT = 45987
 
 class Citra:
-    def __init__(self, address="127.0.0.1", port=CITRA_PORT, timeout=2.0):
+    def __init__(self, address="127.0.0.1", port=CITRA_PORT, timeout=2.0, retries=3):
+        """
+        Requests that time out are resent up to `retries` times with the same id; the server
+        answers duplicates from its reply cache instead of running them again.
+        """
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        for option in (socket.SO_SNDBUF, socket.SO_RCVBUF):
+            if self.socket.getsockopt(socket.SOL_SOCKET, option) < MAX_PACKET_SIZE * 2:
+                self.socket.setsockopt(socket.SOL_SOCKET, option, MAX_PACKET_SIZE * 2)
         self.address = address
         self.port = port
-        self.socket.settimeout(timeout)
+        self.timeout = timeout
+        self.retries = retries
 
     def is_connected(self):
         return self.socket is not None
 
     def _generate_header(self, request_type, data_size):
         request_id = random.getrandbits(32)
-        return (struct.pack("IIII", CURRENT_REQUEST_VERSION, request_id, request_type, data_size), request_id)
+        return (struct.pack("<IIII", PROTOCOL_MAGIC, request_id, request_type, data_size), request_id)
 
     def _read_and_validate_header(self, raw_reply, expected_id, expected_type):
-        reply_version, reply_id, reply_type, reply_data_size = struct.unpack("IIII", raw_reply[:4*4])
-        if (CURRENT_REQUEST_VERSION == reply_version and
-            expected_id == reply_id and
-            expected_type == reply_type and
-            reply_data_size == len(raw_reply[4*4:])):
-            return raw_reply[4*4:]
-        return None
+        if len(raw_reply) < HEADER_SIZE:
+            return None
+        magic, reply_id, reply_type, reply_data_size = struct.unpack("<IIII", raw_reply[:HEADER_SIZE])
+        if (magic != PROTOCOL_MAGIC or reply_id != expected_id or reply_type != expected_type or
+                reply_data_size != len(raw_reply) - HEADER_SIZE):
+            return None
+        data = raw_reply[HEADER_SIZE:]
+        if len(data) == 8 and struct.unpack_from("<I", data)[0] == ERROR_REPLY_MAGIC:
+            raise RPCError(struct.unpack_from("<I", data, 4)[0])
+        return data
 
-    def _request(self, request_type, data=b""):
+    def _request(self, request_type, data=b"", timeout=None, resend=True):
+        """Returns the reply data, raises RPCError on an error reply and TimeoutError if the
+        server never answers."""
         request, request_id = self._generate_header(request_type, len(data))
-        self.socket.sendto(request + data, (self.address, self.port))
-        raw_reply = self.socket.recv(MAX_PACKET_SIZE)
-        return self._read_and_validate_header(raw_reply, request_id, request_type)
+        self.socket.settimeout(self.timeout if timeout is None else timeout)
+        attempts = self.retries + 1 if resend else 1
+        for _ in range(attempts):
+            self.socket.sendto(request + data, (self.address, self.port))
+            try:
+                while True:
+                    reply = self._read_and_validate_header(self.socket.recv(MAX_PACKET_SIZE),
+                                                           request_id, request_type)
+                    if reply is not None:
+                        return reply
+            except socket.timeout:
+                continue
+        raise TimeoutError(f"No reply to {RequestType(request_type).name} after {attempts} attempts")
 
     def _read_chunks(self, request_type, operation, generation, total_size):
         result = bytearray()
@@ -95,9 +154,16 @@ class Citra:
 
     def capabilities(self):
         data = self._request(RequestType.Capabilities)
-        if data is None or len(data) != 8:
+        if len(data) < 16:
             return None
-        return struct.unpack("II", data)
+        magic, capabilities, max_data_size, build_size = struct.unpack_from("<4I", data)
+        if magic != PROTOCOL_MAGIC or len(data) != 16 + build_size:
+            return None
+        return {
+            "capabilities": capabilities,
+            "max_packet_data_size": max_data_size,
+            "build": data[16:].decode("utf-8", errors="replace"),
+        }
 
     def emulation_control(self, operation, path=""):
         data = struct.pack("I", operation) + path.encode("utf-8")
@@ -142,6 +208,40 @@ class Citra:
 
     def frame_advance(self):
         return self.emulation_control(EmulationControl.FrameAdvance)
+
+    def _take_screenshot(self, res_scale, flags):
+        # The server replies once a frame has been rendered (or after its 10 second timeout).
+        # Resending would start a second capture, so the request is sent only once.
+        reply = self._request(RequestType.TakeScreenshot, struct.pack("<II", res_scale, flags),
+                              timeout=max(self.timeout or 0, 15), resend=False)
+        result, width, height, data_size = struct.unpack("<4I", reply[:16])
+        if result != ScreenshotResult.Success:
+            raise RuntimeError(f"Screenshot failed: {ScreenshotResult(result).name}")
+        data = bytearray()
+        while len(data) < data_size:
+            size = min(MAX_REQUEST_DATA_SIZE, data_size - len(data))
+            chunk = self._request(RequestType.ReadScreenshot, struct.pack("<II", len(data), size))
+            if not chunk:
+                raise RuntimeError("Screenshot data is no longer available")
+            data.extend(chunk)
+        return width, height, bytes(data)
+
+    def screenshot_png(self, res_scale=0, secondary_window=False):
+        """Returns the current frame as PNG bytes; res_scale 0 uses the internal resolution."""
+        flags = SCREENSHOT_FLAG_SECONDARY_WINDOW if secondary_window else 0
+        return self._take_screenshot(res_scale, flags)[2]
+
+    def screenshot_raw(self, res_scale=0, secondary_window=False):
+        """Returns (width, height, rgb8_bytes) for the current frame."""
+        flags = SCREENSHOT_FLAG_RAW_RGB
+        if secondary_window:
+            flags |= SCREENSHOT_FLAG_SECONDARY_WINDOW
+        return self._take_screenshot(res_scale, flags)
+
+    def perf_stats(self, reset=False):
+        """Returns the frontend's performance stats; reset=True computes and resets them."""
+        reply = self._request(RequestType.GetPerfStats, struct.pack("<I", 1 if reset else 0))
+        return dict(zip(PERF_STATS_FIELDS, struct.unpack("<10dI", reply[:0x54])))
 
     def pica_timeline(self, start=0xFFFFFFFF, count=20, kind=0xFFFFFFFF,
                       required_changes=0, target_address=0xFFFFFFFF,
@@ -368,13 +468,8 @@ class Citra:
         processes = {}
         read_processes = 0
         while True:
-            request_data = struct.pack("II", read_processes, 0x7FFFFFFF)
-            request, request_id = self._generate_header(RequestType.ProcessList, len(request_data))
-            request += request_data
-            self.socket.sendto(request, (self.address, self.port))
-
-            raw_reply = self.socket.recv(MAX_PACKET_SIZE)
-            reply_data = self._read_and_validate_header(raw_reply, request_id, RequestType.ProcessList)
+            reply_data = self._request(RequestType.ProcessList,
+                                       struct.pack("II", read_processes, 0x7FFFFFFF))
 
             if reply_data:
                 read_count = struct.unpack("I", reply_data[0:4])[0]
@@ -392,26 +487,14 @@ class Citra:
         return processes
 
     def get_process(self):
-        request_data = struct.pack("II", 0, 0)
-        request, request_id = self._generate_header(RequestType.SetGetProcess, len(request_data))
-        request += request_data
-        self.socket.sendto(request, (self.address, self.port))
-
-        raw_reply = self.socket.recv(MAX_PACKET_SIZE)
-        reply_data = self._read_and_validate_header(raw_reply, request_id, RequestType.SetGetProcess)
-
+        reply_data = self._request(RequestType.SetGetProcess, struct.pack("II", 0, 0))
         if reply_data:
             return struct.unpack("I", reply_data)[0]
         else:
             return None
 
     def set_process(self, process_id):
-        request_data = struct.pack("II", 1, process_id)
-        request, request_id = self._generate_header(RequestType.SetGetProcess, len(request_data))
-        request += request_data
-        self.socket.sendto(request, (self.address, self.port))
-
-        self.socket.recv(MAX_PACKET_SIZE)
+        self._request(RequestType.SetGetProcess, struct.pack("II", 1, process_id))
 
     def read_memory(self, read_address, read_size):
         """
@@ -421,13 +504,8 @@ class Citra:
         result = bytes()
         while read_size > 0:
             temp_read_size = min(read_size, MAX_REQUEST_DATA_SIZE)
-            request_data = struct.pack("II", read_address, temp_read_size)
-            request, request_id = self._generate_header(RequestType.ReadMemory, len(request_data))
-            request += request_data
-            self.socket.sendto(request, (self.address, self.port))
-
-            raw_reply = self.socket.recv(MAX_PACKET_SIZE)
-            reply_data = self._read_and_validate_header(raw_reply, request_id, RequestType.ReadMemory)
+            reply_data = self._request(RequestType.ReadMemory,
+                                       struct.pack("II", read_address, temp_read_size))
 
             if reply_data:
                 result += reply_data
@@ -454,12 +532,7 @@ class Citra:
             temp_write_size = min(write_size, MAX_REQUEST_DATA_SIZE - 8)
             request_data = struct.pack("II", write_address, temp_write_size)
             request_data += write_contents[:temp_write_size]
-            request, request_id = self._generate_header(RequestType.WriteMemory, len(request_data))
-            request += request_data
-            self.socket.sendto(request, (self.address, self.port))
-
-            raw_reply = self.socket.recv(MAX_PACKET_SIZE)
-            reply_data = self._read_and_validate_header(raw_reply, request_id, RequestType.WriteMemory)
+            reply_data = self._request(RequestType.WriteMemory, request_data)
 
             if None != reply_data:
                 write_address += temp_write_size

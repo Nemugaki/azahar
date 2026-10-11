@@ -1,5 +1,6 @@
-// Copyright Citra Emulator Project / Azahar Emulator Project
+// Copyright 2015-2026 Citra Emulator Project / Azahar Emulator Project
 // Licensed under GPLv2 or any later version
+// Refer to the misc/licenses/gplv2.txt file included.
 
 #include "citra_qt/debugger/graphics/graphics_tracing.h"
 
@@ -114,8 +115,9 @@ void GraphicsTracingWidget::StopRecording() {
     if (!context) {
         return;
     }
-    const QString filename = QFileDialog::getSaveFileName(
-        this, tr("Save CiTrace"), QStringLiteral("citrace.ctf"), tr("CiTrace File (*.ctf)"));
+    const QString filename =
+        QFileDialog::getSaveFileName(this, tr("Save CiTrace"), QStringLiteral("citrace.ctf"),
+                                     tr("CiTrace File") + QStringLiteral(" (*.ctf)"));
     if (filename.isEmpty()) {
         return;
     }

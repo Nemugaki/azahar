@@ -1,13 +1,18 @@
-// Copyright Citra Emulator Project / Azahar Emulator Project
-// Licensed under GPLv2 or any later version
-// Refer to the license.txt file included.
+// Copyright 2019-2026 Citra Emulator Project / Azahar Emulator Project
+// Licensed under GPLv3 or any later version
+// Refer to the LICENSE.txt file included.
 
+#include <algorithm>
+#include <cstring>
+#include <future>
+#include <lodepng.h>
 #include "common/hash.h"
 #include "common/logging/log.h"
 #include "common/scm_rev.h"
 #include "common/settings.h"
 #include "core/arm/arm_interface.h"
 #include "core/core.h"
+#include "core/frontend/framebuffer_layout.h"
 #include "core/hle/kernel/process.h"
 #include "core/memory.h"
 #include "core/rpc/packet.h"
@@ -21,6 +26,7 @@
 #include "video_core/pica/shader_setup.h"
 #include "video_core/pica/shader_unit.h"
 #include "video_core/pica/vertex_loader.h"
+#include "video_core/renderer_base.h"
 #include "video_core/shader/shader_interpreter.h"
 
 #include <chrono>
@@ -59,12 +65,19 @@ RPCServer::RPCServer(Core::System& system_, EmulationControlHandler emulation_co
 }
 
 RPCServer::~RPCServer() {
-    request_handler_thread.request_stop();
-    wait_request_handler_thread.request_stop();
-    request_handler_thread.join();
-    wait_request_handler_thread.join();
+    Stop();
     if (pica_trace_owned) {
         Pica::DebugUtils::FinishPicaTracing(Pica::DebugUtils::PicaTraceOwner::RPC);
+    }
+}
+
+void RPCServer::Stop() {
+    for (auto* thread :
+         {&request_handler_thread, &wait_request_handler_thread, &screenshot_thread}) {
+        if (thread->joinable()) {
+            thread->request_stop();
+            thread->join();
+        }
     }
 }
 
@@ -219,6 +232,7 @@ u32 RPCServer::GetEnabledCapabilities() const {
     if (Settings::values.rpc_allow_screenshots.GetValue()) {
         capabilities |= CAPABILITY_SCREENSHOTS;
     }
+    capabilities |= CAPABILITY_PERF_STATS;
     if (Settings::values.pica_debugging.GetValue()) {
         if (Settings::values.rpc_allow_pica_snapshot.GetValue()) {
             capabilities |= CAPABILITY_PICA_SNAPSHOT | CAPABILITY_PICA_RENDER_TARGET;
@@ -292,6 +306,11 @@ bool RPCServer::IsPacketTypeEnabled(PacketType packet_type) const {
         return capabilities & CAPABILITY_RENDER_OUTPUTS;
     case PacketType::RenderDebug:
         return capabilities & CAPABILITY_RENDER_DEBUG;
+    case PacketType::TakeScreenshot:
+    case PacketType::ReadScreenshot:
+        return capabilities & CAPABILITY_SCREENSHOTS;
+    case PacketType::GetPerfStats:
+        return capabilities & CAPABILITY_PERF_STATS;
     default:
         return false;
     }
@@ -1624,6 +1643,162 @@ void RPCServer::HandleEmulationControl(Packet& packet, EmulationControl operatio
     packet.SendReply();
 }
 
+void RPCServer::HandleTakeScreenshot(std::unique_ptr<Packet> packet, u32 res_scale,
+                                     ScreenshotFlags flags) {
+    const auto reply = [](Packet& reply_packet, const ScreenshotInfo& info) {
+        std::memcpy(reply_packet.GetPacketData().data(), &info, sizeof(info));
+        reply_packet.SetPacketDataSize(sizeof(info));
+        reply_packet.SendReply();
+    };
+    const auto fail = [&](ScreenshotResult result) {
+        ScreenshotInfo info{};
+        info.result = result;
+        reply(*packet, info);
+    };
+
+    // Unlike upstream, this server outlives emulation sessions, so there may be no renderer.
+    if (!system.IsPoweredOn()) {
+        return SendError(*packet, Error::InvalidState);
+    }
+    constexpr ScreenshotFlags valid_flags =
+        ScreenshotFlags::SecondaryWindow | ScreenshotFlags::RawRGB;
+    if (True(flags & ~valid_flags) || res_scale > MAX_SCREENSHOT_RES_SCALE) {
+        return fail(ScreenshotResult::InvalidArgument);
+    }
+    if (Settings::values.graphics_api.GetValue() == Settings::GraphicsAPI::Software) {
+        return fail(ScreenshotResult::Unsupported);
+    }
+
+    auto& renderer = system.GPU().Renderer();
+    {
+        std::scoped_lock lock{screenshot_mutex};
+        if (screenshot_in_progress || renderer.IsScreenshotPending()) {
+            return fail(ScreenshotResult::Busy);
+        }
+        screenshot_in_progress = true;
+        screenshot_data.clear();
+    }
+
+    if (res_scale == 0) {
+        res_scale = renderer.GetResolutionScaleFactor();
+    }
+    const bool is_secondary = True(flags & ScreenshotFlags::SecondaryWindow);
+    const auto layout = Layout::FrameLayoutFromResolutionScale(res_scale, is_secondary);
+
+    struct CaptureState {
+        std::vector<u8> pixels;
+        std::promise<bool> done;
+    };
+    auto state = std::make_shared<CaptureState>();
+    state->pixels.resize(static_cast<std::size_t>(layout.width) * layout.height * 4);
+    auto done_future = state->done.get_future();
+
+    renderer.RequestScreenshot(
+        state->pixels.data(), [state](bool invert_y) { state->done.set_value(invert_y); }, layout);
+
+    // Encode the screenshot in a separate thread, to prevent stalling the emulation thread
+    // or the RPC thread.
+    screenshot_thread = std::jthread([this, state, done_future = std::move(done_future),
+                                      packet = std::move(packet), layout, flags,
+                                      reply](std::stop_token stop_token) mutable {
+        // If emulation is paused no frame is rendered, so time out instead of hanging the client.
+        constexpr auto screenshot_timeout = std::chrono::seconds(10);
+        constexpr auto poll_interval = std::chrono::milliseconds(50);
+
+        ScreenshotInfo info{};
+        std::vector<u8> data;
+
+        const auto deadline = std::chrono::steady_clock::now() + screenshot_timeout;
+        while (done_future.wait_for(poll_interval) != std::future_status::ready &&
+               !stop_token.stop_requested() && std::chrono::steady_clock::now() < deadline) {
+        }
+
+        if (done_future.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
+            LOG_ERROR(RPC_Server, "Timed out waiting for screenshot");
+            info.result = ScreenshotResult::Timeout;
+        } else {
+            const bool invert_y = done_future.get();
+            const u32 width = layout.width;
+            const u32 height = layout.height;
+
+            // Convert to RGB8
+            std::vector<u8> rgb(static_cast<std::size_t>(width) * height * 3);
+            for (u32 y = 0; y < height; y++) {
+                const u32 src_y = invert_y ? (height - 1 - y) : y;
+                const u8* src = state->pixels.data() + static_cast<std::size_t>(src_y) * width * 4;
+                u8* dst = rgb.data() + static_cast<std::size_t>(y) * width * 3;
+                for (u32 x = 0; x < width; x++) {
+                    dst[x * 3 + 0] = src[x * 4 + 2];
+                    dst[x * 3 + 1] = src[x * 4 + 1];
+                    dst[x * 3 + 2] = src[x * 4 + 0];
+                }
+            }
+
+            info.result = ScreenshotResult::Success;
+            if (True(flags & ScreenshotFlags::RawRGB)) {
+                data = std::move(rgb);
+            } else if (const u32 ret = lodepng::encode(data, rgb, width, height, LCT_RGB, 8)) {
+                LOG_ERROR(RPC_Server, "Failed to encode screenshot: {}", lodepng_error_text(ret));
+                data.clear();
+                info.result = ScreenshotResult::EncodeFailed;
+            }
+            if (info.result == ScreenshotResult::Success) {
+                info.width = width;
+                info.height = height;
+                info.data_size = static_cast<u32>(data.size());
+            }
+        }
+
+        {
+            std::scoped_lock lock{screenshot_mutex};
+            screenshot_data = std::move(data);
+            screenshot_in_progress = false;
+        }
+        if (!stop_token.stop_requested()) {
+            reply(*packet, info);
+        }
+    });
+}
+
+void RPCServer::HandleReadScreenshot(Packet& packet, u32 offset, u32 data_size) {
+    u32 read_size = 0;
+    {
+        std::scoped_lock lock{screenshot_mutex};
+        if (!screenshot_in_progress && offset < screenshot_data.size()) {
+            read_size = std::min(
+                {data_size, MAX_READ_SIZE, static_cast<u32>(screenshot_data.size() - offset)});
+            std::memcpy(packet.GetPacketData().data(), screenshot_data.data() + offset, read_size);
+        }
+    }
+
+    packet.SetPacketDataSize(read_size);
+    packet.SendReply();
+}
+
+void RPCServer::HandleGetPerfStats(Packet& packet, PerfStatsMode mode) {
+    if (!system.IsPoweredOn()) {
+        return SendError(packet, Error::InvalidState);
+    }
+    const auto results =
+        mode == PerfStatsMode::GetReset ? system.GetAndResetPerfStats() : system.GetLastPerfStats();
+    const PerfStatsInfo info{
+        .system_fps = results.system_fps,
+        .game_fps = results.game_fps,
+        .time_vblank_interval = results.time_vblank_interval,
+        .time_hle_svc = results.time_hle_svc,
+        .time_hle_ipc = results.time_hle_ipc,
+        .time_gpu = results.time_gpu,
+        .time_swap = results.time_swap,
+        .time_remaining = results.time_remaining,
+        .emulation_speed = results.emulation_speed,
+        .artic_transmitted = results.artic_transmitted,
+        .artic_events = results.artic_events.raw,
+    };
+    std::memcpy(packet.GetPacketData().data(), &info, sizeof(info));
+    packet.SetPacketDataSize(sizeof(info));
+    packet.SendReply();
+}
+
 bool RPCServer::ValidatePacket(const PacketHeader& header) const {
     if (header.magic != PROTOCOL_MAGIC || header.packet_size > MAX_PACKET_DATA_SIZE) {
         return false;
@@ -1661,6 +1836,12 @@ bool RPCServer::ValidatePacket(const PacketHeader& header) const {
         return header.packet_size >= 4 * sizeof(u32) && header.packet_size <= 6 * sizeof(u32);
     case PacketType::RenderDebug:
         return header.packet_size >= sizeof(u32) && header.packet_size <= MAX_PACKET_DATA_SIZE;
+    case PacketType::TakeScreenshot:
+    case PacketType::ReadScreenshot:
+        return header.packet_size == 2 * sizeof(u32);
+    case PacketType::GetPerfStats:
+        // Upstream clients send an unused second argument
+        return header.packet_size == sizeof(u32) || header.packet_size == 2 * sizeof(u32);
     default:
         return false;
     }
@@ -1729,6 +1910,22 @@ void RPCServer::HandleSingleRequest(std::unique_ptr<Packet> request_packet) {
         case PacketType::Capabilities:
             HandleCapabilities(*request_packet);
             success = true;
+            break;
+        case PacketType::TakeScreenshot:
+            // Takes ownership of the packet and always replies
+            return HandleTakeScreenshot(std::move(request_packet), arg1,
+                                        static_cast<ScreenshotFlags>(arg2));
+        case PacketType::ReadScreenshot:
+            if (arg2 > 0 && arg2 <= MAX_READ_SIZE) {
+                HandleReadScreenshot(*request_packet, arg1, arg2);
+                success = true;
+            }
+            break;
+        case PacketType::GetPerfStats:
+            if (arg1 <= static_cast<u32>(PerfStatsMode::GetReset)) {
+                HandleGetPerfStats(*request_packet, static_cast<PerfStatsMode>(arg1));
+                success = true;
+            }
             break;
         case PacketType::EmulationControl: {
             const auto operation = static_cast<EmulationControl>(arg1);

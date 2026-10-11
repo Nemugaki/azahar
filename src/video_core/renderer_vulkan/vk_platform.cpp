@@ -1,6 +1,6 @@
-// Copyright Citra Emulator Project / Azahar Emulator Project
+// Copyright 2023-2026 Citra Emulator Project / Azahar Emulator Project
 // Licensed under GPLv2 or any later version
-// Refer to the license.txt file included.
+// Refer to the misc/licenses/gplv2.txt file included.
 
 // Include the vulkan platform specific header
 #if defined(ANDROID)
@@ -14,6 +14,7 @@
 #define VK_USE_PLATFORM_XLIB_KHR
 #endif
 
+#include <algorithm>
 #include <memory>
 #include <vector>
 #include <boost/container/static_vector.hpp>
@@ -326,6 +327,26 @@ vk::UniqueInstance CreateInstance(const Common::DynamicLibrary& library,
     if (dump_command_buffers) {
         layers.push_back("VK_LAYER_LUNARG_api_dump");
     }
+
+    // Sanitize layers list
+    const auto layer_properties = vk::enumerateInstanceLayerProperties();
+    if (layer_properties.empty()) {
+        LOG_WARNING(Render_Vulkan, "Instance layer properties list is empty");
+    }
+
+    // boost::container::erase_if only exists since Boost 1.90; keep system Boost builds working.
+    const auto unavailable = std::remove_if(layers.begin(), layers.end(), [&](const char* layer) {
+        const auto it = std::find_if(
+            layer_properties.begin(), layer_properties.end(),
+            [layer](const auto& prop) { return std::strcmp(layer, prop.layerName) == 0; });
+
+        if (it == layer_properties.end()) {
+            LOG_INFO(Render_Vulkan, "Candidate instance layer {} is not available", layer);
+            return true;
+        }
+        return false;
+    });
+    layers.erase(unavailable, layers.end());
 
     vk::InstanceCreateInfo instance_ci = {
         .flags = GetInstanceFlags(),

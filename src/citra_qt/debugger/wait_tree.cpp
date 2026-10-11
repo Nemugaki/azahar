@@ -1,6 +1,6 @@
 // Copyright 2016 Citra Emulator Project
 // Licensed under GPLv2 or any later version
-// Refer to the license.txt file included.
+// Refer to the misc/licenses/gplv2.txt file included.
 
 #include <array>
 #include "citra_qt/debugger/dock_workspace.h"
@@ -106,7 +106,7 @@ bool WaitTreeExpandableItem::IsExpandable() const {
 }
 
 QString WaitTreeWaitObject::GetText() const {
-    return tr("[%1]%2 %3")
+    return QStringLiteral("[%1]%2 %3")
         .arg(object.GetObjectId())
         .arg(QString::fromStdString(object.GetTypeName()),
              QString::fromStdString(object.GetName()));
@@ -206,7 +206,7 @@ QString WaitTreeThread::GetText() const {
         status = tr("dead");
         break;
     }
-    QString pc_info = tr(" PC = 0x%1 LR = 0x%2")
+    QString pc_info = QStringLiteral(" PC = 0x%1 LR = 0x%2")
                           .arg(thread.context.GetProgramCounter(), 8, 16, QLatin1Char('0'))
                           .arg(thread.context.GetLinkRegister(), 8, 16, QLatin1Char('0'));
     return QStringLiteral("%1%2 (%3) ").arg(WaitTreeWaitObject::GetText(), pc_info, status);
@@ -254,10 +254,10 @@ std::vector<std::unique_ptr<WaitTreeItem>> WaitTreeThread::GetChildren() const {
         processor = tr("all");
         break;
     case Kernel::ThreadProcessorId::ThreadProcessorId0:
-        processor = tr("AppCore");
+        processor = QStringLiteral("AppCore");
         break;
     case Kernel::ThreadProcessorId::ThreadProcessorId1:
-        processor = tr("SysCore");
+        processor = QStringLiteral("SysCore");
         break;
     default:
         processor = tr("Unknown processor %1").arg(thread.processor_id);

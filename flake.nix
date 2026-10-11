@@ -59,6 +59,9 @@
           base = pkgs.azahar.override {
             useDiscordRichPresence = features.discordRpc;
             enableGamemode = features.gamemode;
+            # Upstream master links FFmpeg directly and requires 7.x exactly (libavutil 59);
+            # the nixpkgs package still targets the 2126 releases, which use 6.x.
+            ffmpeg_6-headless = pkgs.ffmpeg_7-headless;
           };
         in
         {
@@ -66,6 +69,11 @@
           default = base.overrideAttrs (old: {
             version = "agentic-pica-${self.shortRev or self.dirtyShortRev or "dirty"}";
             src = source;
+            # nixpkgs carries patches against upstream release sources; quartzcore.patch is
+            # macOS-only and does not apply to this tree's src/citra_qt/CMakeLists.txt.
+            patches = builtins.filter (p: baseNameOf (toString p) != "quartzcore.patch") (
+              old.patches or [ ]
+            );
             postPatch = (old.postPatch or "") + ''
               echo "${self.rev or self.dirtyRev or "0000000000000000000000000000000000000000"}" > GIT-COMMIT
               echo "agentic-pica-${self.shortRev or self.dirtyShortRev or "dirty"}" > GIT-TAG

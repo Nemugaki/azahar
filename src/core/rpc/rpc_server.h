@@ -1,6 +1,6 @@
-// Copyright Citra Emulator Project / Azahar Emulator Project
-// Licensed under GPLv2 or any later version
-// Refer to the license.txt file included.
+// Copyright 2018-2026 Citra Emulator Project / Azahar Emulator Project
+// Licensed under GPLv3 or any later version
+// Refer to the LICENSE.txt file included.
 
 #pragma once
 
@@ -33,6 +33,9 @@ public:
     ~RPCServer();
 
     void QueueRequest(std::unique_ptr<RPC::Packet> request);
+
+    /// Stops the request handler and screenshot threads. No replies are sent after this returns.
+    void Stop();
 
 private:
     void HandleReadMemory(Packet& packet, u32 address, u32 data_size);
@@ -67,6 +70,9 @@ private:
                             u32 sequence, u32 offset, u32 count);
     void HandleRenderDebug(Packet& packet, RenderDebugOperation operation,
                            std::span<const u8> request);
+    void HandleTakeScreenshot(std::unique_ptr<Packet> packet, u32 res_scale, ScreenshotFlags flags);
+    void HandleReadScreenshot(Packet& packet, u32 offset, u32 data_size);
+    void HandleGetPerfStats(Packet& packet, PerfStatsMode mode);
     u32 GetEnabledCapabilities() const;
     bool IsPacketTypeEnabled(PacketType packet_type) const;
     bool IsEmulationControlEnabled(EmulationControl operation) const;
@@ -94,6 +100,14 @@ private:
     u32 pica_shader_generation = 0;
     bool pica_shader_vertex_input_valid = false;
     std::mutex render_capture_mutex;
+
+    std::mutex screenshot_mutex;
+    /// Set while a screenshot is being captured or encoded
+    bool screenshot_in_progress = false;
+    /// Image data of the last screenshot taken, to be read in chunks by the client
+    std::vector<u8> screenshot_data;
+    // Declared after the state it uses so it is joined before that state is destroyed
+    std::jthread screenshot_thread;
 };
 
 } // namespace Core::RPC
