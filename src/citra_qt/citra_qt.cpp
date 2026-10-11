@@ -4641,6 +4641,12 @@ int LaunchQtFrontend(int argc, char* argv[]) {
     }
 #endif
 
+#ifdef HAVE_SDL2
+    // SDL's events subsystem (started by the input and Vulkan code) otherwise turns SIGINT and
+    // SIGTERM into SDL_QUIT events, which this frontend never reads, so both signals were ignored.
+    SDL_SetHint(SDL_HINT_NO_SIGNAL_HANDLERS, "1");
+#endif
+
     // Init settings params
     QCoreApplication::setOrganizationName(QStringLiteral("Azahar Developers"));
     QCoreApplication::setOrganizationDomain(QStringLiteral("azahar_emu.org"));
